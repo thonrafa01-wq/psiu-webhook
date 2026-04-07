@@ -79,13 +79,40 @@ Retorne APENAS uma das seguintes categorias, sem explicação:
   return resp.choices[0].message.content?.trim().toLowerCase() || 'outro';
 }
 
+// ── Extrai telefone e mensagem do payload (Chatwoot ou formato simples) ────────
+function extrairDados(body: Record<string, unknown>): { telefone: string; mensagem: string } {
+  // Formato Chatwoot: { event: "message_created", message_type: "incoming", ... }
+  if (body.event === 'message_created' || body.event === 'message_updated') {
+    // Ignora mensagens enviadas pelo agente/bot (type outgoing)
+    if (body.message_type === 'outgoing' || body.message_type === 'activity') {
+      return { telefone: '', mensagem: '' };
+    }
+    // Telefone vem em conversation.meta.sender.phone_number ou contact.phone_number
+    const conversation = body.conversation as Record<string, unknown> || {};
+    const meta = conversation.meta as Record<string, unknown> || {};
+    const sender = (meta.sender || body.contact || {}) as Record<string, unknown>;
+    const phone = String(sender.phone_number || sender.phone || '').replace(/\D/g, '');
+    const content = String(body.content || '');
+    return { telefone: phone, mensagem: content };
+  }
+
+  // Formato simples (form-urlencoded do SMSNet webhook direto)
+  const telefone = String(
+    body.number || body.numero || body.phone || body.from || body.sender || ''
+  ).replace(/\D/g, '');
+  const mensagem = String(
+    body.content || body.mensagem || body.message || body.text || body.body || ''
+  );
+  return { telefone, mensagem };
+}
+
 Deno.serve(async (req) => {
   try {
     if (req.method === 'GET') {
       return new Response('WhatsApp Webhook PSIU TELECOM - OK', { status: 200 });
     }
 
-    let body: Record<string, string> = {};
+    let body: Record<string, unknown> = {};
     const contentType = req.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
       body = await req.json().catch(() => ({}));
@@ -100,10 +127,9 @@ Deno.serve(async (req) => {
       }
     }
 
-    console.log('Webhook body recebido:', JSON.stringify(body));
+    console.log('Webhook body recebido:', JSON.stringify(body).substring(0, 500));
 
-    const telefone = (body.numero || body.phone || body.from || body.sender || '').replace(/\D/g, '');
-    const mensagemRecebida = body.mensagem || body.message || body.text || body.body || '';
+    const { telefone, mensagem: mensagemRecebida } = extrairDados(body);
 
     if (!telefone || !mensagemRecebida) {
       return Response.json({ ok: true, msg: 'sem dados relevantes' });
@@ -135,7 +161,6 @@ Deno.serve(async (req) => {
         } else {
           clienteLocal = await db.ClienteWhatsapp.create(dadosCliente);
         }
-        // Registrar atendimento inicial
         await db.Atendimento.create({
           telefone,
           nome_cliente: resultadoBusca.nome || '',
@@ -209,7 +234,6 @@ Deno.serve(async (req) => {
 
     const opcao = mensagemRecebida.trim();
 
-    // Registrar atendimento
     const atendimentoData: Record<string, unknown> = {
       telefone,
       nome_cliente: nomeCliente,
@@ -221,73 +245,58 @@ Deno.serve(async (req) => {
     };
 
     if (opcao === '1' || intencao === 'boleto') {
-      try {
-        const resultadoBoleto = await buscarBoletos(idCliente, telefone);
-        if (resultadoBoleto.success) {
-          atendimentoData.estado_final = 'resolvido_auto';
-          atendimentoData.resolvido = true;
-          await db.Atendimento.create(atendimentoData);
-          await enviarMensagem(telefone, `✅ Boleto enviado para seu WhatsApp, *${nomeCliente}*!\n\nCaso não receba em alguns instantes, entre em contato com nossa equipe.`);
-        } else {
-          atendimentoData.estado_final = 'resolvido_auto';
-          atendimentoData.resolvido = true;
-          await db.Atendimento.create(atendimentoData);
-          await enviarMensagem(telefone, `*${nomeCliente}*, não encontrei faturas em aberto para sua conta. 🎉\n\nSe você acredita que há um erro, posso conectar você com nossa equipe. Digite *3* para falar com um atendente.`);
-        }
-      } catch (_e) {
-        atendimentoData.estado_final = 'em_andamento';
-        await db.Atendimento.create(atendimentoData);
-        await enviarMensagem(telefone, `Desculpe, ocorreu um erro ao buscar seu boleto. Tente novamente ou digite *3* para falar com um atendente.`);
+      atendimentoData.estado_final = 'boleto_solicitado';
+      await db.Atendimento.create({ ...atendimentoData, resolvido: true });
+      const boletos = await buscarBoletos(idCliente, telefone);
+      if (boletos.success && boletos.boletos?.length > 0) {
+        const b = boletos.boletos[0];
+        const venc = b.vencimento ? ` | Vence: ${b.vencimento}` : '';
+        const val = b.valor ? ` | Valor: R$ ${b.valor}` : '';
+        let msg = `💰 *Segunda via de boleto*\n\n${venc}${val}\n\n`;
+        if (b.pix) msg += `*PIX Copia e Cola:*\n\`${b.pix}\`\n\n`;
+        if (b.url) msg += `*Link do boleto:*\n${b.url}\n\n`;
+        msg += `Qualquer dúvida, estou aqui! 😊`;
+        await enviarMensagem(telefone, msg);
+      } else {
+        await enviarMensagem(telefone, `Não encontrei boletos em aberto para sua conta no momento. 😊\n\nSe precisar de mais alguma coisa, é só me falar!`);
       }
-
-    } else if (opcao === '2' || intencao === 'suporte') {
-      try {
-        const chamados = await listarChamados(idCliente);
-        if (chamados.success && chamados.data && chamados.data.length > 0) {
-          atendimentoData.estado_final = 'resolvido_auto';
-          atendimentoData.resolvido = true;
-          await db.Atendimento.create(atendimentoData);
-          await enviarMensagem(telefone, `*${nomeCliente}*, você já possui um chamado em aberto (#${chamados.data[0].id}). 🔧\n\nNossa equipe já está trabalhando no seu caso!\n\nSe for urgente, digite *3* para falar com um atendente.`);
-        } else {
-          const resultadoChamado = await abrirChamado(idCliente, telefone);
-          if (resultadoChamado.success) {
-            atendimentoData.estado_final = 'resolvido_auto';
-            atendimentoData.resolvido = true;
-            await db.Atendimento.create(atendimentoData);
-            await enviarMensagem(telefone, `✅ Chamado aberto com sucesso, *${nomeCliente}*!\n\n📋 *Protocolo: #${resultadoChamado.id || resultadoChamado.chamado || 'gerado'}*\n\nNossa equipe técnica irá analisar em breve. Horário: Seg-Sex 8h-18h, Sáb 8h-12h.`);
-          } else {
-            atendimentoData.estado_final = 'transferido_humano';
-            await db.Atendimento.create(atendimentoData);
-            await enviarMensagem(telefone, `Não foi possível abrir o chamado automaticamente. 😕\n\nDigite *3* para falar diretamente com nossa equipe técnica.`);
-          }
-        }
-      } catch (_e) {
-        atendimentoData.estado_final = 'em_andamento';
-        await db.Atendimento.create(atendimentoData);
-        await enviarMensagem(telefone, `Ocorreu um erro ao processar seu chamado. Digite *3* para falar com um atendente.`);
-      }
-
-    } else if (opcao === '3' || intencao === 'cancelamento') {
-      atendimentoData.estado_final = 'transferido_humano';
-      await db.Atendimento.create(atendimentoData);
-      await db.ClienteWhatsapp.update(clienteLocal.id, { estado_conversa: 'aguardando_humano' });
-      await enviarMensagem(telefone, `Entendido, *${nomeCliente}*! 👨‍💻\n\nTransferindo você para um de nossos atendentes. Em instantes alguém irá te atender.\n\n⏰ Horário: Seg-Sex 8h-18h, Sáb 8h-12h\n\nObrigado pela paciência!`);
-
-    } else if (intencao === 'menu') {
-      atendimentoData.estado_final = 'em_andamento';
-      await db.Atendimento.create(atendimentoData);
-      await enviarMensagem(telefone, `Olá, *${nomeCliente}*! 👋 Como posso te ajudar?\n\n1️⃣ Segunda via de boleto/PIX\n2️⃣ Suporte técnico (sem internet)\n3️⃣ Falar com atendente\n\nDigite o número da opção ou descreva o que precisa.`);
-
-    } else {
-      atendimentoData.estado_final = 'em_andamento';
-      await db.Atendimento.create(atendimentoData);
-      await enviarMensagem(telefone, `*${nomeCliente}*, não entendi muito bem. 😅\n\nPosso te ajudar com:\n\n1️⃣ Segunda via de boleto/PIX\n2️⃣ Suporte técnico (sem internet)\n3️⃣ Falar com atendente\n\nDigite o número da opção.`);
+      return Response.json({ ok: true });
     }
 
+    if (opcao === '2' || intencao === 'suporte') {
+      atendimentoData.estado_final = 'chamado_aberto';
+      const chamados = await listarChamados(idCliente);
+      const chamadoAberto = chamados.success && chamados.chamados?.find((c: Record<string, unknown>) => c.status !== 'Fechado' && c.status !== 'Resolvido');
+      if (chamadoAberto) {
+        await db.Atendimento.create({ ...atendimentoData, resolvido: true });
+        await enviarMensagem(telefone, `🔍 Já existe um chamado aberto para você:\n\n*Chamado #${chamadoAberto.id}*\n📋 ${chamadoAberto.descricao || 'Suporte técnico'}\n📌 Status: ${chamadoAberto.status}\n\nNossa equipe já está cuidando! Qualquer novidade te avisamos aqui. 💪`);
+      } else {
+        const resultado = await abrirChamado(idCliente, telefone);
+        await db.Atendimento.create({ ...atendimentoData, resolvido: resultado.success });
+        if (resultado.success) {
+          await enviarMensagem(telefone, `✅ *Chamado de suporte aberto com sucesso!*\n\n📋 Protocolo: #${resultado.id || 'gerado'}\n\nNossa equipe técnica já foi notificada e entrará em contato em breve. ⏱️\n\nQualquer dúvida, estou aqui!`);
+        } else {
+          await enviarMensagem(telefone, `Não consegui abrir o chamado automaticamente. 😕\n\nVou transferir para um atendente humano agora.\n\nAguarde um momento... 🙏`);
+          await db.ClienteWhatsapp.update(clienteLocal.id, { estado_conversa: 'aguardando_humano' });
+        }
+      }
+      return Response.json({ ok: true });
+    }
+
+    if (opcao === '3' || intencao === 'cancelamento' || mensagemRecebida.toLowerCase().includes('atendente') || mensagemRecebida.toLowerCase().includes('humano')) {
+      atendimentoData.estado_final = 'transferido_humano';
+      await db.Atendimento.create({ ...atendimentoData, resolvido: false });
+      await db.ClienteWhatsapp.update(clienteLocal.id, { estado_conversa: 'aguardando_humano' });
+      await enviarMensagem(telefone, `👨‍💼 Transferindo para um atendente humano...\n\nEm breve alguém da nossa equipe entrará em contato. Horário de atendimento: *seg a sex, 8h às 18h*.\n\nSe for urgente fora do horário, aguarde o próximo dia útil. 🙏`);
+      return Response.json({ ok: true });
+    }
+
+    // Resposta genérica — mostra o menu novamente
+    await enviarMensagem(telefone, `Olá, *${nomeCliente}*! 😊 Como posso te ajudar?\n\n1️⃣ Segunda via de boleto/PIX\n2️⃣ Suporte técnico (sem internet)\n3️⃣ Falar com atendente\n\nDigite o número da opção ou descreva o que precisa.`);
     return Response.json({ ok: true });
 
-  } catch (error) {
-    console.error('Erro no webhook:', error);
-    return Response.json({ error: error.message }, { status: 500 });
+  } catch (err) {
+    console.error('Erro no webhook:', err);
+    return Response.json({ ok: false, error: String(err) }, { status: 500 });
   }
 });
