@@ -1,0 +1,43 @@
+{
+  "type": "object",
+  "properties": {
+    "telefone": {
+      "type": "string"
+    },
+    "nome_cliente": {
+      "type": "string"
+    },
+    "id_cliente_receitanet": {
+      "type": "string"
+    },
+    "motivo": {
+      "type": "string",
+      "enum": [
+        "boleto",
+        "suporte",
+        "cancelamento",
+        "menu",
+        "outro"
+      ]
+    },
+    "mensagem_original": {
+      "type": "string"
+    },
+    "estado_final": {
+      "type": "string",
+      "enum": [
+        "resolvido_auto",
+        "transferido_humano",
+        "em_andamento"
+      ]
+    },
+    "data_atendimento": {
+      "type": "string"
+    },
+    "resolvido": {
+      "type": "boolean"
+    }
+  },
+  "required": [],
+  "name": "Atendimento"
+}
