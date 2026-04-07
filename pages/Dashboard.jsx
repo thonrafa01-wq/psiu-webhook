@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { Atendimento, ClienteWhatsapp } from "@/api/entities";
 
+const SENHA_CORRETA = "7zvn87C2@";
+
 const MOTIVO_LABEL = {
   boleto: "💰 Boleto/PIX",
   suporte: "🔧 Suporte Técnico",
@@ -29,20 +31,82 @@ const ESTADO_LABEL = {
   em_andamento: "⏳ Em andamento",
 };
 
+function LoginScreen({ onLogin }) {
+  const [senha, setSenha] = useState("");
+  const [erro, setErro] = useState(false);
+  const [mostrar, setMostrar] = useState(false);
+
+  function tentar(e) {
+    e.preventDefault();
+    if (senha === SENHA_CORRETA) {
+      sessionStorage.setItem("psiu_auth", "1");
+      onLogin();
+    } else {
+      setErro(true);
+      setSenha("");
+      setTimeout(() => setErro(false), 2000);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="bg-white rounded-2xl shadow-lg p-8 w-full max-w-sm">
+        <div className="text-center mb-6">
+          <span className="text-4xl">📡</span>
+          <h1 className="text-xl font-bold text-gray-800 mt-2">PSIU TELECOM</h1>
+          <p className="text-gray-500 text-sm mt-1">Central de Atendimento</p>
+        </div>
+        <form onSubmit={tentar} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Senha de acesso</label>
+            <div className="relative">
+              <input
+                type={mostrar ? "text" : "password"}
+                value={senha}
+                onChange={e => setSenha(e.target.value)}
+                className={`w-full border rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 ${
+                  erro ? "border-red-400 ring-red-200" : "border-gray-300 focus:ring-green-200 focus:border-green-400"
+                }`}
+                placeholder="Digite a senha..."
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={() => setMostrar(!mostrar)}
+                className="absolute right-3 top-2 text-gray-400 text-sm"
+              >
+                {mostrar ? "🙈" : "👁️"}
+              </button>
+            </div>
+            {erro && <p className="text-red-500 text-xs mt-1">Senha incorreta. Tente novamente.</p>}
+          </div>
+          <button
+            type="submit"
+            className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-2 rounded-lg transition-colors"
+          >
+            Entrar
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
+  const [autenticado, setAutenticado] = useState(() => sessionStorage.getItem("psiu_auth") === "1");
   const [atendimentos, setAtendimentos] = useState([]);
   const [clientes, setClientes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [abaAtiva, setAbaAtiva] = useState("dashboard");
   const [filtroMotivo, setFiltroMotivo] = useState("todos");
   const [salvandoId, setSalvandoId] = useState(null);
-  const [msgEnviada, setMsgEnviada] = useState({});
 
   useEffect(() => {
+    if (!autenticado) return;
     carregarDados();
     const interval = setInterval(carregarDados, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [autenticado]);
 
   async function carregarDados() {
     try {
@@ -57,7 +121,8 @@ export default function Dashboard() {
     }
   }
 
-  // ── Stats ─────────────────────────────────────────────────────────────────
+  if (!autenticado) return <LoginScreen onLogin={() => setAutenticado(true)} />;
+
   const hoje = new Date().toISOString().slice(0, 10);
   const atHoje = atendimentos.filter(a => a.data_atendimento?.slice(0, 10) === hoje);
   const emAtendimentoHumano = clientes.filter(c => c.estado_conversa === "aguardando_humano");
@@ -65,14 +130,12 @@ export default function Dashboard() {
   const totalAtendimentos = atendimentos.length;
   const taxaResolucao = totalAtendimentos > 0 ? Math.round((resolvidosAuto / totalAtendimentos) * 100) : 0;
 
-  // Motivos agrupados
   const motivoCount = atendimentos.reduce((acc, a) => {
     acc[a.motivo] = (acc[a.motivo] || 0) + 1;
     return acc;
   }, {});
   const motivosOrdenados = Object.entries(motivoCount).sort((a, b) => b[1] - a[1]);
 
-  // Clientes recorrentes
   const clienteCount = atendimentos.reduce((acc, a) => {
     if (!a.nome_cliente) return acc;
     if (!acc[a.telefone]) acc[a.telefone] = { nome: a.nome_cliente, telefone: a.telefone, count: 0, motivos: {} };
@@ -82,14 +145,12 @@ export default function Dashboard() {
   }, {});
   const clientesRecorrentes = Object.values(clienteCount).sort((a, b) => b.count - a.count).slice(0, 10);
 
-  // Atendimentos filtrados
   const atsFiltrados = filtroMotivo === "todos" ? atendimentos : atendimentos.filter(a => a.motivo === filtroMotivo);
 
   async function assumirAtendimento(cliente) {
     setSalvandoId(cliente.id);
     try {
       await ClienteWhatsapp.update(cliente.id, { estado_conversa: "aguardando_humano" });
-      setMsgEnviada(prev => ({ ...prev, [cliente.id]: "assumido" }));
       await carregarDados();
     } finally {
       setSalvandoId(null);
@@ -100,7 +161,6 @@ export default function Dashboard() {
     setSalvandoId(cliente.id);
     try {
       await ClienteWhatsapp.update(cliente.id, { estado_conversa: "identificado" });
-      setMsgEnviada(prev => ({ ...prev, [cliente.id]: "liberado" }));
       await carregarDados();
     } finally {
       setSalvandoId(null);
@@ -128,15 +188,23 @@ export default function Dashboard() {
               <p className="text-green-200 text-sm">Central de Atendimento WhatsApp</p>
             </div>
           </div>
-          <button onClick={carregarDados} className="bg-green-500 hover:bg-green-400 px-3 py-1.5 rounded text-sm flex items-center gap-2">
-            🔄 Atualizar
-          </button>
+          <div className="flex items-center gap-3">
+            <button onClick={carregarDados} className="bg-green-500 hover:bg-green-400 px-3 py-1.5 rounded text-sm flex items-center gap-2">
+              🔄 Atualizar
+            </button>
+            <button
+              onClick={() => { sessionStorage.removeItem("psiu_auth"); setAutenticado(false); }}
+              className="bg-green-700 hover:bg-green-600 px-3 py-1.5 rounded text-sm"
+            >
+              Sair
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Tabs */}
       <div className="max-w-7xl mx-auto px-4 mt-4">
-        <div className="flex gap-1 bg-white rounded-lg p-1 shadow-sm w-fit">
+        <div className="flex gap-1 bg-white rounded-lg p-1 shadow-sm w-fit flex-wrap">
           {[
             { id: "dashboard", label: "📊 Dashboard" },
             { id: "historico", label: "📋 Histórico" },
@@ -158,10 +226,9 @@ export default function Dashboard() {
 
       <div className="max-w-7xl mx-auto px-4 py-4">
 
-        {/* ── Dashboard ─────────────────────────────────────────────────── */}
+        {/* Dashboard */}
         {abaAtiva === "dashboard" && (
           <div className="space-y-5">
-            {/* Cards de stats */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <StatCard icon="📨" label="Hoje" value={atHoje.length} color="blue" />
               <StatCard icon="📦" label="Total Atendimentos" value={totalAtendimentos} color="gray" />
@@ -170,7 +237,6 @@ export default function Dashboard() {
             </div>
 
             <div className="grid md:grid-cols-2 gap-4">
-              {/* Motivos mais frequentes */}
               <div className="bg-white rounded-xl shadow-sm p-5">
                 <h2 className="font-semibold text-gray-700 mb-4">🎯 Motivos mais frequentes</h2>
                 {motivosOrdenados.length === 0 ? (
@@ -186,10 +252,7 @@ export default function Dashboard() {
                             <span className="text-gray-500">{count} ({pct}%)</span>
                           </div>
                           <div className="bg-gray-100 rounded-full h-2">
-                            <div
-                              className="bg-green-500 h-2 rounded-full transition-all"
-                              style={{ width: `${pct}%` }}
-                            />
+                            <div className="bg-green-500 h-2 rounded-full transition-all" style={{ width: `${pct}%` }} />
                           </div>
                         </div>
                       );
@@ -198,7 +261,6 @@ export default function Dashboard() {
                 )}
               </div>
 
-              {/* Clientes recorrentes */}
               <div className="bg-white rounded-xl shadow-sm p-5">
                 <h2 className="font-semibold text-gray-700 mb-4">🔁 Clientes que mais contatam</h2>
                 {clientesRecorrentes.length === 0 ? (
@@ -215,11 +277,9 @@ export default function Dashboard() {
                           </div>
                         </div>
                         <div className="text-right">
-                          <span className="bg-green-100 text-green-800 text-xs font-semibold px-2 py-1 rounded-full">
-                            {c.count}x
-                          </span>
+                          <span className="bg-green-100 text-green-800 text-xs font-semibold px-2 py-1 rounded-full">{c.count}x</span>
                           <div className="flex gap-1 mt-1 justify-end flex-wrap">
-                            {Object.entries(c.motivos).sort((a,b) => b[1]-a[1]).slice(0,2).map(([m]) => (
+                            {Object.entries(c.motivos).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([m]) => (
                               <span key={m} className={`text-xs px-1.5 py-0.5 rounded ${MOTIVO_COLOR[m]}`}>
                                 {MOTIVO_LABEL[m]?.split(" ")[0]}
                               </span>
@@ -233,7 +293,6 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Alertas */}
             {emAtendimentoHumano.length > 0 && (
               <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
                 <h3 className="font-semibold text-orange-800 mb-2">⚠️ Aguardando atendimento humano ({emAtendimentoHumano.length})</h3>
@@ -241,12 +300,7 @@ export default function Dashboard() {
                   {emAtendimentoHumano.map(c => (
                     <div key={c.id} className="bg-white border border-orange-200 rounded-lg px-3 py-2 text-sm flex items-center gap-2">
                       <span className="font-medium">{c.nome || c.telefone}</span>
-                      <button
-                        onClick={() => { setAbaAtiva("controle"); }}
-                        className="text-orange-600 hover:underline text-xs"
-                      >
-                        gerenciar →
-                      </button>
+                      <button onClick={() => setAbaAtiva("controle")} className="text-orange-600 hover:underline text-xs">gerenciar →</button>
                     </div>
                   ))}
                 </div>
@@ -255,18 +309,16 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ── Histórico ─────────────────────────────────────────────────── */}
+        {/* Histórico */}
         {abaAtiva === "historico" && (
           <div className="bg-white rounded-xl shadow-sm">
             <div className="p-4 border-b flex items-center gap-3 flex-wrap">
-              <span className="font-semibold text-gray-700">Filtrar por motivo:</span>
+              <span className="font-semibold text-gray-700">Filtrar:</span>
               {["todos", "boleto", "suporte", "cancelamento", "menu", "outro"].map(m => (
                 <button
                   key={m}
                   onClick={() => setFiltroMotivo(m)}
-                  className={`px-3 py-1 rounded-full text-sm ${
-                    filtroMotivo === m ? "bg-green-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                  }`}
+                  className={`px-3 py-1 rounded-full text-sm ${filtroMotivo === m ? "bg-green-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
                 >
                   {m === "todos" ? "Todos" : MOTIVO_LABEL[m]}
                 </button>
@@ -314,7 +366,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ── Clientes ──────────────────────────────────────────────────── */}
+        {/* Clientes */}
         {abaAtiva === "clientes" && (
           <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
             <div className="p-4 border-b">
@@ -370,15 +422,14 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ── Controle Manual ───────────────────────────────────────────── */}
+        {/* Controle Manual */}
         {abaAtiva === "controle" && (
           <div className="space-y-4">
             <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 text-sm text-yellow-800">
-              <strong>⚡ Controle Manual:</strong> Aqui você pode assumir o atendimento de qualquer cliente (o bot para de responder) ou liberar de volta para o bot. Use quando perceber que o agente não está funcionando corretamente.
+              <strong>⚡ Controle Manual:</strong> Assuma o atendimento de qualquer cliente (o bot para de responder) ou devolva ao bot quando quiser. Use quando o agente não estiver funcionando corretamente.
             </div>
 
             <div className="grid md:grid-cols-2 gap-4">
-              {/* Aguardando humano */}
               <div className="bg-white rounded-xl shadow-sm">
                 <div className="p-4 border-b bg-orange-50 rounded-t-xl">
                   <h3 className="font-semibold text-orange-800">👨‍💻 Em atendimento humano ({emAtendimentoHumano.length})</h3>
@@ -393,15 +444,13 @@ export default function Dashboard() {
                         <p className="font-medium text-sm">{c.nome || "Sem nome"}</p>
                         <p className="text-xs text-gray-400">{c.telefone}</p>
                         {c.ultimo_contato && (
-                          <p className="text-xs text-gray-400">
-                            Último contato: {new Date(c.ultimo_contato).toLocaleString("pt-BR")}
-                          </p>
+                          <p className="text-xs text-gray-400">{new Date(c.ultimo_contato).toLocaleString("pt-BR")}</p>
                         )}
                       </div>
                       <button
                         onClick={() => liberarAtendimento(c)}
                         disabled={salvandoId === c.id}
-                        className="bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-2 rounded-lg disabled:opacity-50 flex items-center gap-1"
+                        className="bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-2 rounded-lg disabled:opacity-50"
                       >
                         {salvandoId === c.id ? "..." : "🤖 Devolver ao Bot"}
                       </button>
@@ -410,11 +459,10 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {/* Clientes no bot — assume manual */}
               <div className="bg-white rounded-xl shadow-sm">
                 <div className="p-4 border-b bg-blue-50 rounded-t-xl">
-                  <h3 className="font-semibold text-blue-800">🤖 No bot automatico</h3>
-                  <p className="text-xs text-blue-600 mt-1">Clique para assumir o atendimento manualmente</p>
+                  <h3 className="font-semibold text-blue-800">🤖 No bot automático</h3>
+                  <p className="text-xs text-blue-600 mt-1">Clique para assumir manualmente</p>
                 </div>
                 <div className="divide-y max-h-96 overflow-y-auto">
                   {clientes.filter(c => c.estado_conversa !== "aguardando_humano" && c.identificado).length === 0 ? (
@@ -428,9 +476,7 @@ export default function Dashboard() {
                           <p className="font-medium text-sm">{c.nome || "Sem nome"}</p>
                           <p className="text-xs text-gray-400">{c.telefone}</p>
                           {c.ultimo_contato && (
-                            <p className="text-xs text-gray-400">
-                              {new Date(c.ultimo_contato).toLocaleString("pt-BR")}
-                            </p>
+                            <p className="text-xs text-gray-400">{new Date(c.ultimo_contato).toLocaleString("pt-BR")}</p>
                           )}
                         </div>
                         <button
