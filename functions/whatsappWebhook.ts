@@ -41,20 +41,33 @@ async function listarChamados(idCliente: string) {
 }
 
 // ── SMSNet helper ─────────────────────────────────────────────────────────────
+// URL correta: https://sistema.smsnet.com.br/sms/global
+// Para WhatsApp exclusivo, adicionar -6 ao usuário: usuario-6
+// Documentação: https://blog.smsnet.com.br/api-integracao-avancada/
 
 async function enviarMensagem(telefone: string, mensagem: string) {
-  // Remove o 55 do início se houver, SMSNet normalmente quer só DDD+número
-  const numero = telefone.replace(/^55/, '');
+  // Garantir que o número tenha o código do país 55
+  let numero = telefone.replace(/\D/g, '');
+  if (!numero.startsWith('55')) {
+    numero = '55' + numero;
+  }
+
+  // Usar sufixo -6 para forçar envio via WhatsApp
+  const username = SMSNET_USER.includes('-') ? SMSNET_USER : `${SMSNET_USER}-6`;
+
   const params = new URLSearchParams({
-    usuario: SMSNET_USER,
-    senha: SMSNET_PASS,
-    numero: numero,
-    mensagem: mensagem,
-    tipo: 'whatsapp',
+    username: username,
+    password: SMSNET_PASS,
+    to: numero,
+    msg: mensagem,
   });
-  const res = await fetch(`https://sistema.smsnet.com.br/enviar.php?${params.toString()}`);
+
+  const url = `https://sistema.smsnet.com.br/sms/global?${params.toString()}`;
+  console.log(`Enviando mensagem para ${numero} via SMSNet...`);
+  
+  const res = await fetch(url);
   const text = await res.text();
-  console.log(`SMSNet resposta para ${numero}:`, text);
+  console.log(`SMSNet status: ${res.status} | resposta:`, text.substring(0, 200));
   return text;
 }
 
@@ -67,7 +80,7 @@ async function classificarIntencao(mensagem: string): Promise<string> {
     if (msg.match(/boleto|fatura|pagar|pagamento|pix|segunda via/)) return 'boleto';
     if (msg.match(/internet|conexao|conexão|sem sinal|caiu|lento|travando|rompimento|fibra/)) return 'suporte';
     if (msg.match(/cancelar|cancelamento/)) return 'cancelamento';
-    if (msg.match(/oi|olá|ola|bom dia|boa tarde|boa noite|ola|menu|ajuda|help|opções/)) return 'menu';
+    if (msg.match(/oi|olá|ola|bom dia|boa tarde|boa noite|menu|ajuda|help|opções/)) return 'menu';
     return 'outro';
   }
 
@@ -114,10 +127,8 @@ Deno.serve(async (req) => {
         }
       }
     } else {
-      // Tentar JSON mesmo assim
       const text = await req.text().catch(() => '');
-      try { body = JSON.parse(text); } catch { 
-        // tentar form
+      try { body = JSON.parse(text); } catch {
         const params = new URLSearchParams(text);
         for (const [k, v] of params.entries()) body[k] = v;
       }
@@ -125,7 +136,7 @@ Deno.serve(async (req) => {
 
     console.log('Webhook body recebido:', JSON.stringify(body));
 
-    // Extrair campos da mensagem (SMSNet envia: numero, mensagem, ou variações)
+    // Extrair campos da mensagem
     const telefone = (body.numero || body.phone || body.from || body.sender || '').replace(/\D/g, '');
     const mensagemRecebida = body.mensagem || body.message || body.text || body.body || '';
 
@@ -134,7 +145,6 @@ Deno.serve(async (req) => {
       return Response.json({ ok: true, msg: 'sem dados relevantes' });
     }
 
-    // Criar client Base44 como service role (sem auth de usuário)
     const base44 = createClientFromRequest(req);
     const db = base44.asServiceRole.entities;
 
@@ -146,9 +156,8 @@ Deno.serve(async (req) => {
     if (!clienteLocal || !clienteLocal.identificado) {
       // Tentar identificar automaticamente pelo telefone no Receitanet
       const resultadoBusca = await buscarClientePorTelefone(telefone);
-      
+
       if (resultadoBusca.success && resultadoBusca.id) {
-        // Encontrou! Salvar na base local
         const dadosCliente = {
           telefone,
           id_cliente_receitanet: String(resultadoBusca.id),
@@ -170,11 +179,10 @@ Deno.serve(async (req) => {
         return Response.json({ ok: true });
       }
 
-      // Não encontrou pelo telefone - verificar se está aguardando CPF
+      // Verificar se está aguardando CPF
       if (clienteLocal?.estado_conversa === 'aguardando_cpf') {
-        // Cliente digitou o CPF
         const resultadoCpf = await buscarClientePorCpf(mensagemRecebida);
-        
+
         if (resultadoCpf.success && resultadoCpf.id) {
           const dadosCliente = {
             telefone,
@@ -197,13 +205,12 @@ Deno.serve(async (req) => {
       }
 
       // Primeiro contato - solicitar CPF
-      const novoCliente = await db.ClienteWhatsapp.create({
+      clienteLocal = await db.ClienteWhatsapp.create({
         telefone,
         identificado: false,
         ultimo_contato: new Date().toISOString(),
         estado_conversa: 'aguardando_cpf',
       });
-      clienteLocal = novoCliente;
 
       await enviarMensagem(telefone, `Olá! 👋 Sou o assistente virtual da *PSIU TELECOM*.\n\nPara te atender melhor, preciso verificar seu cadastro. Por favor, informe seu *CPF ou CNPJ* (apenas números):`);
       return Response.json({ ok: true });
@@ -213,27 +220,23 @@ Deno.serve(async (req) => {
     const idCliente = clienteLocal.id_cliente_receitanet;
     const nomeCliente = clienteLocal.nome || 'cliente';
 
-    // Atualizar último contato
     await db.ClienteWhatsapp.update(clienteLocal.id, {
       ultimo_contato: new Date().toISOString(),
     });
 
-    // Verificar se está aguardando humano
+    // Cliente aguardando atendente humano
     if (clienteLocal.estado_conversa === 'aguardando_humano') {
-      // Não responder automaticamente - está com atendente
       console.log(`Cliente ${nomeCliente} está com atendente humano - não respondendo automaticamente`);
       return Response.json({ ok: true, msg: 'cliente com atendente humano' });
     }
 
     // Classificar intenção
     const intencao = await classificarIntencao(mensagemRecebida);
-    console.log(`Intenção classificada: ${intencao} para mensagem: "${mensagemRecebida}"`);
+    console.log(`Intenção classificada: ${intencao} | mensagem: "${mensagemRecebida}"`);
 
-    // Verificar opções numéricas
     const opcao = mensagemRecebida.trim();
 
     if (opcao === '1' || intencao === 'boleto') {
-      // Segunda via de boleto
       try {
         const resultadoBoleto = await buscarBoletos(idCliente, telefone);
         if (resultadoBoleto.success) {
@@ -241,41 +244,35 @@ Deno.serve(async (req) => {
         } else {
           await enviarMensagem(telefone, `*${nomeCliente}*, não encontrei faturas em aberto para sua conta. 🎉\n\nSe você acredita que há um erro, posso conectar você com nossa equipe. Digite *3* para falar com um atendente.`);
         }
-      } catch (e) {
-        await enviarMensagem(telefone, `Desculpe, ocorreu um erro ao buscar seu boleto. Por favor, tente novamente ou digite *3* para falar com um atendente.`);
+      } catch (_e) {
+        await enviarMensagem(telefone, `Desculpe, ocorreu um erro ao buscar seu boleto. Tente novamente ou digite *3* para falar com um atendente.`);
       }
 
     } else if (opcao === '2' || intencao === 'suporte') {
-      // Suporte técnico
       try {
-        // Verificar se já tem chamado aberto
         const chamados = await listarChamados(idCliente);
         if (chamados.success && chamados.data && chamados.data.length > 0) {
-          await enviarMensagem(telefone, `*${nomeCliente}*, você já possui um chamado de suporte em aberto (#${chamados.data[0].id}). 🔧\n\nNossa equipe técnica já está trabalhando no seu caso. Assim que houver atualização, entraremos em contato!\n\nSe o problema for urgente, digite *3* para falar com um atendente.`);
+          await enviarMensagem(telefone, `*${nomeCliente}*, você já possui um chamado em aberto (#${chamados.data[0].id}). 🔧\n\nNossa equipe já está trabalhando no seu caso. Assim que houver atualização, entraremos em contato!\n\nSe for urgente, digite *3* para falar com um atendente.`);
         } else {
-          // Abrir chamado
           const resultadoChamado = await abrirChamado(idCliente, telefone);
           if (resultadoChamado.success) {
-            await enviarMensagem(telefone, `✅ Chamado de suporte aberto com sucesso, *${nomeCliente}*!\n\n📋 *Protocolo: #${resultadoChamado.id || resultadoChamado.chamado || 'gerado'}*\n\nNossa equipe técnica irá analisar e entrar em contato em breve. Horário de atendimento: Seg-Sex 8h-18h, Sáb 8h-12h.\n\nAlguma outra dúvida?`);
+            await enviarMensagem(telefone, `✅ Chamado aberto com sucesso, *${nomeCliente}*!\n\n📋 *Protocolo: #${resultadoChamado.id || resultadoChamado.chamado || 'gerado'}*\n\nNossa equipe técnica irá analisar em breve. Horário: Seg-Sex 8h-18h, Sáb 8h-12h.\n\nAlguma outra dúvida?`);
           } else {
             await enviarMensagem(telefone, `Não foi possível abrir o chamado automaticamente. 😕\n\nDigite *3* para falar diretamente com nossa equipe técnica.`);
           }
         }
-      } catch (e) {
-        await enviarMensagem(telefone, `Ocorreu um erro ao processar seu chamado. Por favor, entre em contato com nossa equipe. Digite *3* para falar com um atendente.`);
+      } catch (_e) {
+        await enviarMensagem(telefone, `Ocorreu um erro ao processar seu chamado. Digite *3* para falar com um atendente.`);
       }
 
     } else if (opcao === '3' || intencao === 'cancelamento') {
-      // Transferir para humano
       await db.ClienteWhatsapp.update(clienteLocal.id, { estado_conversa: 'aguardando_humano' });
-      await enviarMensagem(telefone, `Entendido, *${nomeCliente}*! 👨‍💻\n\nEstou transferindo você para um de nossos atendentes. Em instantes alguém irá te atender.\n\n⏰ Horário de atendimento: Seg-Sex 8h-18h, Sáb 8h-12h\n\nObrigado pela paciência!`);
+      await enviarMensagem(telefone, `Entendido, *${nomeCliente}*! 👨‍💻\n\nTransferindo você para um de nossos atendentes. Em instantes alguém irá te atender.\n\n⏰ Horário: Seg-Sex 8h-18h, Sáb 8h-12h\n\nObrigado pela paciência!`);
 
     } else if (intencao === 'menu') {
-      // Menu principal
       await enviarMensagem(telefone, `Olá, *${nomeCliente}*! 👋 Como posso te ajudar?\n\n1️⃣ Segunda via de boleto/PIX\n2️⃣ Suporte técnico (sem internet)\n3️⃣ Falar com atendente\n\nDigite o número da opção ou descreva o que precisa.`);
 
     } else {
-      // Não entendeu - oferecer menu
       await enviarMensagem(telefone, `*${nomeCliente}*, não entendi muito bem. 😅\n\nPosso te ajudar com:\n\n1️⃣ Segunda via de boleto/PIX\n2️⃣ Suporte técnico (sem internet)\n3️⃣ Falar com atendente\n\nDigite o número da opção.`);
     }
 
