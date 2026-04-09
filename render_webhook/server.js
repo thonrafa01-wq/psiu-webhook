@@ -68,6 +68,8 @@ const buscarClientePorTelefone = (phone)     => receitanetPost('clientes', { pho
 const buscarClientePorCpf      = (cpfcnpj)   => receitanetPost('clientes', { cpfcnpj: cpfcnpj.replace(/\D/g, '') });
 const buscarClientePorId       = (idCliente) => receitanetPost('clientes', { idCliente });
 const abrirChamado             = (idCliente, contato) => receitanetPost('abertura-chamado', { idCliente, contato, ocorrenciatipo: 1, motivoos: 1 });
+const verificarAcesso          = (idCliente, contato) => receitanetPost('verificar-acesso', { idCliente, contato });
+const notificacaoPagamento     = (idCliente, contato) => receitanetPost('notificacao-pagamento', { idCliente, contato });
 
 // ═════════════════════════════════════════════════════════════════════════════
 // MÓDULO 3 — AGENTE DE IA (Groq)
@@ -622,18 +624,12 @@ async function handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente) {
 async function handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente) {
   const luzVermelha = mensagem.toLowerCase().match(/luz vermelha|vermelho|piscando/);
 
-  // Buscar por CPF (mais confiável que busca por idCliente que pode retornar cliente errado)
-  const cpf = cliente.cpf_cnpj ? cliente.cpf_cnpj.replace(/\D/g, '') : null;
-  const dadosEquip = cpf ? await buscarClientePorCpf(cpf) : await buscarClientePorId(idCliente);
-
-  // Receitanet pode retornar contratos como objeto ou array — normalizar
-  const contrato = dadosEquip.success
-    ? (Array.isArray(dadosEquip.contratos) ? dadosEquip.contratos[0] : dadosEquip.contratos)
-    : null;
-
-  // Equipamento online = tem IP atribuído (PPPoE conectado). ip null = offline.
-  const equipOnline = contrato?.servidor?.ip !== null && contrato?.servidor?.ip !== undefined && contrato?.servidor?.ip !== '';
-  console.log('[EQUIP] cpf:', cpf, '| ip:', contrato?.servidor?.ip, '| online:', equipOnline, '| isManutencao:', contrato?.servidor?.isManutencao);
+  // Usar endpoint /verificar-acesso — retorna status: 1=online, 2=offline
+  const acesso = await verificarAcesso(idCliente, telefone);
+  const statusAcesso = acesso?.status; // 1=online, 2=offline, undefined=erro
+  const equipOnline  = statusAcesso === 1;
+  const equipOffline = statusAcesso === 2;
+  console.log('[EQUIP] idCliente:', idCliente, '| status:', statusAcesso, '| msg:', acesso?.msg, '| online:', equipOnline);
 
   const chamado   = await abrirChamado(idCliente, telefone);
   const protocolo = chamado.protocolo || chamado.idSuporte || 'gerado';
@@ -647,9 +643,13 @@ async function handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, id
   } else if (equipOnline) {
     await enviarMensagem(telefone, `*${nome}*, seu equipamento aparece *online* no nosso sistema. Pode ser instabilidade momentânea. 🔄\n\nTenta reiniciar o roteador: *desliga da tomada por 30 segundos e liga novamente.*\n\nJá abri um chamado (protocolo: ${protocolo}). Nossa equipe vai verificar remotamente! 🔧`);
     await alertarRafa('🟡', 'CHAMADO TÉCNICO', nomeCompleto, telefone, `Equipamento *online* mas cliente sem internet.\n📋 Protocolo: ${protocolo}`);
-  } else {
+  } else if (equipOffline) {
     await enviarMensagem(telefone, `*${nome}*, seu equipamento está *offline* no nosso sistema. 📡\n\nTenta reiniciar: *desliga o roteador da tomada por 30 segundos e liga novamente.*\n\nJá abri um chamado (protocolo: ${protocolo}). Se não resolver, nossa equipe entra em contato! 🔧`);
     await alertarRafa('🔴', 'CHAMADO DE CAMPO', nomeCompleto, telefone, `Equipamento *offline*.\n📋 Protocolo: ${protocolo}`);
+  } else {
+    // Não foi possível verificar status — mensagem neutra
+    await enviarMensagem(telefone, `*${nome}*, já abri um chamado técnico para nossa equipe verificar! 🔧\n\nEnquanto isso, tenta reiniciar o roteador: *desliga da tomada por 30 segundos e liga novamente.*\n\n📋 Protocolo: ${protocolo}`);
+    await alertarRafa('🟡', 'CHAMADO TÉCNICO', nomeCompleto, telefone, `Status do equipamento não disponível.\n📋 Protocolo: ${protocolo}`);
   }
 }
 
@@ -701,25 +701,11 @@ async function handleLiberacaoConfirmada(cliente, telefone, nome, nomeCompleto, 
   await enviarMensagem(telefone, `Perfeito, *${nome}*! Aguarda um momento enquanto processo a liberação... ⚙️`);
 
   try {
-    const cpf = cliente.cpf_cnpj ? cliente.cpf_cnpj.replace(/\D/g, '') : null;
-    const dados = cpf ? await buscarClientePorCpf(cpf) : await buscarClientePorId(idCliente);
-    const contrato = dados.success
-      ? (Array.isArray(dados.contratos) ? dados.contratos[0] : dados.contratos)
-      : null;
-    const idContrato = contrato?.idContrato;
-
-    if (!idContrato) throw new Error('idContrato não encontrado');
-
-    // Chamar endpoint de liberação em confiança do Receitanet chatbot
-    const respLib = await fetch(`${RECEITANET_BASE}/liberacao-confianca`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: RECEITANET_TOKEN, app: 'chatbot', idContrato })
-    });
-    const libData = await respLib.json().catch(() => null);
+    // Chamar endpoint oficial de notificação de pagamento / liberação em confiança
+    const libData = await notificacaoPagamento(idCliente, telefone);
     console.log('[LIBERACAO] Resposta:', JSON.stringify(libData));
 
-    if (libData?.success) {
+    if (libData?.liberado || libData?.status === 1) {
       await registrarAtendimento(telefone, nomeCompleto, idCliente, 'liberacao_confianca', '', 'resolvido', true);
       await enviarMensagem(telefone, `✅ *${nome}*, sua conexão foi liberada em confiança!\n\nSua internet deve voltar em alguns minutos. Reinicia o roteador se ainda não voltar.\n\nObrigado por ser nosso cliente! 💙`);
     } else {
