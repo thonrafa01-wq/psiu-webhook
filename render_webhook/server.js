@@ -416,7 +416,7 @@ app.post('/webhook', async (req, res) => {
       await dbCreate('Atendimento', { telefone, nome_cliente: nome, id_cliente_receitanet: idCliente, motivo: 'cancelamento', mensagem_original: mensagemRecebida, estado_final: 'em_andamento', data_atendimento: new Date().toISOString(), resolvido: false });
       await enviarMensagem(telefone, `Oi, *${nome}*! 😔 Ficamos tristes em saber que você quer cancelar.\n\nAntes de tomar essa decisão, posso verificar se temos alguma condição especial pra você continuar com a gente. Às vezes dá pra resolver com um ajuste no plano ou prazo!\n\n👉 Qual o motivo do cancelamento?\n\n1️⃣ Valor (tá caro)\n2️⃣ Problemas técnicos\n3️⃣ Mudança de endereço\n4️⃣ Outro motivo`);
       const horaCanc = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
-      await enviarMensagem('5519999619605', \`⚠️ *SOLICITAÇÃO DE CANCELAMENTO*\n\n⏰ \${horaCanc}\n👤 Cliente: *\${nome}*\n📞 Fone: \${telefone.replace('55','')}\n\nO bot está tentando reter. Acompanhe!\`);
+      await enviarMensagem('5519999619605', `⚠️ *SOLICITAÇÃO DE CANCELAMENTO*\n\n⏰ ${horaCanc}\n👤 Cliente: *${nome}*\n📞 Fone: ${telefone.replace('55','')}\n\nO bot está tentando reter. Acompanhe!`);
       return res.json({ ok: true });
     }
 
