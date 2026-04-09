@@ -73,7 +73,7 @@ async function receitanetPost(endpoint, extraBody) {
   return res.json();
 }
 
-const buscarClientePorTelefone = (phone)     => receitanetPost('clientes', { phone });
+const buscarClientePorTelefone = (phone) => { const phoneSem55 = phone.startsWith('55') ? phone.slice(2) : phone; return receitanetPost('clientes', { phone: phoneSem55 }); };
 const buscarClientePorCpf      = (cpfcnpj)   => receitanetPost('clientes', { cpfcnpj: cpfcnpj.replace(/\D/g, '') });
 const buscarClientePorId       = (idCliente) => receitanetPost('clientes', { idCliente });
 const abrirChamado             = (idCliente, contato) => receitanetPost('abertura-chamado', { idCliente, contato, ocorrenciatipo: 1, motivoos: 1 });
