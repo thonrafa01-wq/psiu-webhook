@@ -9,6 +9,10 @@ const RECEITANET_CHATBOT_TOKEN = process.env.RECEITANET_CHATBOT_TOKEN || '';
 const RECEITANET_BASE = 'https://sistema.receitanet.net/api/novo/chatbot';
 const BASE44_APP_ID = '69d55fd1a341508858f11d46';
 
+// Token dinâmico — atualizado via endpoint /update-token
+let BASE44_SERVICE_TOKEN_DYNAMIC = BASE44_SERVICE_TOKEN_DYNAMIC;
+const REFRESH_SECRET = process.env.REFRESH_SECRET || 'psiu2024refresh';
+
 const ZAPI_INSTANCE = '3F15DC3330DCC11BF2A3BE4FDF68D33E';
 const ZAPI_TOKEN = '0BD8484CB7BFF2DAD22E99B5';
 const ZAPI_CLIENT_TOKEN = 'Fe4e0f41827564db0813cd79b7c5f6e96S';
@@ -24,7 +28,7 @@ async function dbFilter(entity, query) {
   const url = `${BASE44_API}/${entity}?${params.toString()}`;
   console.log('[DB] GET', url.substring(0, 120));
   const res = await fetch(url, {
-    headers: { 'Authorization': `Bearer ${process.env.BASE44_SERVICE_TOKEN || ''}`, 'Content-Type': 'application/json' }
+    headers: { 'Authorization': `Bearer ${BASE44_SERVICE_TOKEN_DYNAMIC}`, 'Content-Type': 'application/json' }
   });
   return await res.json();
 }
@@ -32,7 +36,7 @@ async function dbFilter(entity, query) {
 async function dbCreate(entity, data) {
   const res = await fetch(`${BASE44_API}/${entity}`, {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${process.env.BASE44_SERVICE_TOKEN || ''}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${BASE44_SERVICE_TOKEN_DYNAMIC}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
   return await res.json();
@@ -41,7 +45,7 @@ async function dbCreate(entity, data) {
 async function dbUpdate(entity, id, data) {
   const res = await fetch(`${BASE44_API}/${entity}/${id}`, {
     method: 'PUT',
-    headers: { 'Authorization': `Bearer ${process.env.BASE44_SERVICE_TOKEN || ''}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${BASE44_SERVICE_TOKEN_DYNAMIC}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
   return await res.json();
@@ -185,6 +189,16 @@ async function alertarRafa(emoji, titulo, nome, telefone, extra) {
 }
 
 // ── Webhook principal ─────────────────────────────────────────────────────────
+// ── Endpoint para atualizar o token dinamicamente ────────────────────────────
+app.post('/update-token', (req, res) => {
+  const { token, secret } = req.body;
+  if (secret !== REFRESH_SECRET) return res.status(403).json({ error: 'Unauthorized' });
+  if (!token) return res.status(400).json({ error: 'Token required' });
+  BASE44_SERVICE_TOKEN_DYNAMIC = token;
+  console.log('[TOKEN] Token atualizado dinamicamente às', new Date().toISOString());
+  res.json({ ok: true, updated: new Date().toISOString() });
+});
+
 app.get('/', (req, res) => res.send('PSIU TELECOM Webhook - OK'));
 app.get('/webhook', (req, res) => res.send('PSIU TELECOM Webhook - OK'));
 
