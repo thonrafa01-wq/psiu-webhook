@@ -126,12 +126,20 @@ export default function Dashboard() {
 
   async function carregarDados() {
     try {
-      const [ats, cls] = await Promise.all([
-        Atendimento.list({ sort: "-data_atendimento", limit: 500 }),
-        ClienteWhatsapp.list({ limit: 500 }),
-      ]);
-      setAtendimentos(ats);
-      setClientes(cls);
+      const res = await fetch(`${WEBHOOK_URL}/dashboard-data`);
+      if (res.ok) {
+        const data = await res.json();
+        setAtendimentos(data.atendimentos || []);
+        setClientes(data.clientes || []);
+      } else {
+        // fallback para SDK se Render não responder
+        const [ats, cls] = await Promise.all([
+          Atendimento.list({ sort: "-data_atendimento", limit: 500 }),
+          ClienteWhatsapp.list({ limit: 500 }),
+        ]);
+        setAtendimentos(ats);
+        setClientes(cls);
+      }
     } finally {
       setLoading(false);
     }

@@ -28,6 +28,9 @@ Deno.serve(async (req) => {
     let result;
 
     switch (action) {
+      case 'list':
+        result = await db[entity].list(query || {});
+        break;
       case 'filter':
         result = await db[entity].filter(query || {});
         break;

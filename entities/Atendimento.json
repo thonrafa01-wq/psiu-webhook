@@ -26,9 +26,16 @@
     "estado_final": {
       "type": "string",
       "enum": [
+        "resolvido",
         "resolvido_auto",
+        "chamado_aberto",
         "transferido_humano",
-        "em_andamento"
+        "encaminhado_atendente",
+        "em_andamento",
+        "massiva",
+        "manutencao",
+        "nao_resolvido",
+        "audio_nao_transcrito"
       ]
     },
     "data_atendimento": {
