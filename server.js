@@ -347,6 +347,8 @@ app.post('/webhook', async (req, res) => {
           await dbCreate('Atendimento', { telefone, nome_cliente: nome, id_cliente_receitanet: idCliente, motivo: 'suporte', mensagem_original: mensagemRecebida, estado_final: 'chamado_aberto', data_atendimento: new Date().toISOString(), resolvido: false });
           const chamado2 = await abrirChamado(idCliente, telefone);
           await enviarMensagem(telefone, `Entendido, *${nome}*! 🔧 Mesmo com o equipamento aparecendo online daqui, algo pode estar instável. Abri um chamado pra nossa equipe verificar com mais cuidado.\n\n📋 *Protocolo: ${chamado2.protocolo || chamado2.idSuporte || 'gerado'}*\n\nEm breve um técnico entrará em contato. Qualquer dúvida é só chamar! 🙏`);
+          const horaChamado2 = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+          await enviarMensagem('5519999619605', `🟡 *CHAMADO TÉCNICO ABERTO*\n\n⏰ ${horaChamado2}\n👤 Cliente: *${nome}*\n📞 Fone: ${telefone.replace('55','')}\n\nEquipamento aparece *online* mas cliente sem internet. Pode ser instabilidade.\n📋 Protocolo: ${chamado2.protocolo || chamado2.idSuporte || 'gerado'}`);
         } else {
           await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'suporte_verificando_luzes' });
           await enviarMensagem(telefone, `Tudo bem, *${nome}*! Agora o equipamento está aparecendo *offline* aqui. 🔴\n\nPode verificar as luzes do equipamento pra mim? Tem alguma *luz vermelha piscando*? Me conta o que você está vendo! 😊`);
@@ -375,6 +377,8 @@ app.post('/webhook', async (req, res) => {
         await dbCreate('Atendimento', { telefone, nome_cliente: nome, id_cliente_receitanet: idCliente, motivo: 'suporte', mensagem_original: 'Equipamento offline com luz vermelha piscando - ' + mensagemRecebida, estado_final: 'chamado_aberto', data_atendimento: new Date().toISOString(), resolvido: false });
         const chamado3 = await abrirChamado(idCliente, telefone);
         await enviarMensagem(telefone, `Entendido, *${nome}*! A luz vermelha piscando indica uma falha na fibra óptica — isso precisa de uma visita técnica. 🔧\n\nJá passei o chamado para a nossa *equipe de campo* com o relato do que você me descreveu.\n\n📋 *Protocolo: ${chamado3.protocolo || chamado3.idSuporte || 'gerado'}*\n\nVamos entrar em contato em breve para *agendar a visita*. Pedimos desculpas pelo inconveniente e obrigado pela paciência! 🙏`);
+        const horaLuz = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+        await enviarMensagem('5519999619605', `🔴 *CHAMADO DE CAMPO ABERTO*\n\n⏰ ${horaLuz}\n👤 Cliente: *${nome}*\n📞 Fone: ${telefone.replace('55','')}\n\n⚠️ Luz vermelha piscando — falha na fibra! Visita técnica necessária.\n📋 Protocolo: ${chamado3.protocolo || chamado3.idSuporte || 'gerado'}`);
         return res.json({ ok: true });
       }
 
