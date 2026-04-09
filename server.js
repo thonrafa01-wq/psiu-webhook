@@ -294,7 +294,8 @@ app.post('/webhook', async (req, res) => {
         const jaAvisouMassiva = chamadosRecentes.filter(c => c.data_atendimento >= cincoMinAtras && c.estado_final === 'massiva').length;
         if (jaAvisouMassiva === 0) {
           const qtd = chamadosRecentes.filter(c => c.data_atendimento >= cincoMinAtras).length + 1;
-          await enviarMensagem('5519999619605', `🚨 *ALERTA MASSIVA - PSIU TELECOM*\n\n${qtd} clientes entraram em contato com problemas de conexão nos últimos 5 minutos.\n\nO sistema já está avisando os clientes sobre o rompimento. Verifique a rede! ⚠️`);
+          const horaAgora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+          await enviarMensagem('5519999619605', `🚨🚨🚨 *ATENÇÃO - MASSIVA DETECTADA!*\n\n⏰ Hora: ${horaAgora}\n👥 Clientes afetados: *${qtd}*\n\nVários clientes estão sem internet agora! Verifique o roteador/fibra com URGÊNCIA.\n\n⚡ Os clientes já estão sendo avisados automaticamente pelo bot.`);
         }
 
         return res.json({ ok: true });
