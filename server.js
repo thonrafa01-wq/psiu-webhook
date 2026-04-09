@@ -261,27 +261,29 @@ app.post('/webhook', async (req, res) => {
     if (!telefone || !mensagemRecebida) return;
 
     console.log('[WEBHOOK]', { telefone, msg: mensagemRecebida.substring(0, 100) });
+    console.log('[TELEFONE_BRUTO]', JSON.stringify({ phone: req.body.phone, from: req.body.from, telefoneNormalizado: telefone }));
 
     // ── Buscar cliente no banco local (múltiplos formatos de telefone) ──────────
     let cliente = null;
 
     // Tentar com telefone completo (55...)
     let lista = await dbFilter('ClienteWhatsapp', { telefone });
+    console.log('[DB_BUSCA1]', `telefone=${telefone} resultado=`, Array.isArray(lista) ? lista.length : lista);
     if (Array.isArray(lista) && lista.length > 0) cliente = lista[0];
 
     // Tentar sem prefixo 55
     if (!cliente) {
       const telSem55 = telefone.startsWith('55') ? telefone.slice(2) : telefone;
       lista = await dbFilter('ClienteWhatsapp', { telefone: telSem55 });
+      console.log('[DB_BUSCA2]', `telSem55=${telSem55} resultado=`, Array.isArray(lista) ? lista.length : lista);
       if (Array.isArray(lista) && lista.length > 0) {
         cliente = lista[0];
-        // Normalizar telefone no banco
         await dbUpdate('ClienteWhatsapp', cliente.id, { telefone });
         cliente.telefone = telefone;
       }
     }
 
-    console.log('[SESSAO] cliente encontrado no banco:', cliente ? `id=${cliente.id} identificado=${cliente.identificado} id_receitanet=${cliente.id_cliente_receitanet}` : 'NÃO');
+    console.log('[SESSAO] cliente encontrado no banco:', cliente ? `id=${cliente.id} identificado=${cliente.identificado} id_receitanet=${cliente.id_cliente_receitanet} telefone_banco=${cliente.telefone}` : 'NÃO ENCONTRADO');
 
     // ── ROTA 1: cliente JÁ identificado no banco → atender direto ─────────────
     // Esta é a rota principal. Se temos id_cliente_receitanet, NUNCA pedimos CPF.
