@@ -562,16 +562,19 @@ async function handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente) {
 
 async function handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente) {
   const luzVermelha = mensagem.toLowerCase().match(/luz vermelha|vermelho|piscando/);
-  const dadosEquip  = await buscarClientePorId(idCliente);
-  // Equipamento online = tem IP atribuído no servidor (PPPoE/etc)
-  // ip === null significa que não está conectado (offline)
-  const contrato = dadosEquip.success && Array.isArray(dadosEquip.contratos)
-    ? dadosEquip.contratos[0]
-    : dadosEquip.success && dadosEquip.contratos
-    ? dadosEquip.contratos
+
+  // Buscar por CPF (mais confiável que busca por idCliente que pode retornar cliente errado)
+  const cpf = cliente.cpf_cnpj ? cliente.cpf_cnpj.replace(/\D/g, '') : null;
+  const dadosEquip = cpf ? await buscarClientePorCpf(cpf) : await buscarClientePorId(idCliente);
+
+  // Receitanet pode retornar contratos como objeto ou array — normalizar
+  const contrato = dadosEquip.success
+    ? (Array.isArray(dadosEquip.contratos) ? dadosEquip.contratos[0] : dadosEquip.contratos)
     : null;
-  const equipOnline = contrato?.servidor?.ip !== null && contrato?.servidor?.ip !== undefined;
-  console.log('[EQUIP] ip:', contrato?.servidor?.ip, '| online:', equipOnline, '| isManutencao:', contrato?.servidor?.isManutencao);
+
+  // Equipamento online = tem IP atribuído (PPPoE conectado). ip null = offline.
+  const equipOnline = contrato?.servidor?.ip !== null && contrato?.servidor?.ip !== undefined && contrato?.servidor?.ip !== '';
+  console.log('[EQUIP] cpf:', cpf, '| ip:', contrato?.servidor?.ip, '| online:', equipOnline, '| isManutencao:', contrato?.servidor?.isManutencao);
 
   const chamado   = await abrirChamado(idCliente, telefone);
   const protocolo = chamado.protocolo || chamado.idSuporte || 'gerado';
