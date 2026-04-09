@@ -176,9 +176,12 @@ async function enviarMensagem(telefone, mensagem) {
 // MÓDULO 5 — PROCESSADOR DE ENTRADA (extrai dados do webhook Z-API)
 // ═════════════════════════════════════════════════════════════════════════════
 function extrairDados(body) {
-  if (body.isGroupMsg === true || body.fromMe === true) {
-    return { telefone: '', mensagem: '', audioUrl: null };
+  if (body.isGroupMsg === true) {
+    return { telefone: '', mensagem: '', audioUrl: null, fromMe: false };
   }
+
+  // Mensagens enviadas pelo próprio número (fromMe=true) só passam se forem comandos do Rafa (#fechar)
+  const isFromMe = body.fromMe === true;
 
   let phone = String(body.phone || body.from || '').replace(/\D/g, '').replace(/@.*$/, '');
   if (phone.length === 11) phone = '55' + phone;
@@ -201,7 +204,7 @@ function extrairDados(body) {
   if (audioUrl) console.log('[AUDIO] URL detectada:', audioUrl);
   console.log('[EXTRACT]', { phone, mensagem: mensagem.substring(0, 50), audioUrl: !!audioUrl, type: body.type });
 
-  return { telefone: phone, mensagem, audioUrl };
+  return { telefone: phone, mensagem, audioUrl, fromMe: isFromMe || false };
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -243,7 +246,7 @@ app.post('/webhook', async (req, res) => {
   res.json({ ok: true }); // Responde imediatamente ao Z-API
 
   try {
-    const { telefone, mensagem: mensagemTexto, audioUrl } = extrairDados(req.body);
+    const { telefone, mensagem: mensagemTexto, audioUrl, fromMe } = extrairDados(req.body);
 
     // Transcrever áudio se necessário
     let mensagemRecebida = mensagemTexto;
@@ -262,6 +265,51 @@ app.post('/webhook', async (req, res) => {
 
     console.log('[WEBHOOK]', { telefone, msg: mensagemRecebida.substring(0, 100) });
     console.log('[TELEFONE_BRUTO]', JSON.stringify({ phone: req.body.phone, from: req.body.from, telefoneNormalizado: telefone }));
+
+    // ── GATILHO DO RAFA: mensagens enviadas pelo próprio número ──────────────
+    // Só processa se vier do número da PSIU (fromMe=true) E for um comando #fechar
+    if (fromMe) {
+      const cmd = mensagemRecebida.trim().toLowerCase();
+
+      // #fechar todos — libera TODOS os clientes em atendimento humano
+      if (cmd === '#fechar todos') {
+        const emAtendimento = await dbFilter('ClienteWhatsapp', { estado_conversa: 'atendente' });
+        const emAtendimentoNovo = await dbFilter('ClienteWhatsapp', { estado_conversa: 'atendente_novo_cliente' });
+        const todos = [
+          ...(Array.isArray(emAtendimento) ? emAtendimento : []),
+          ...(Array.isArray(emAtendimentoNovo) ? emAtendimentoNovo : [])
+        ];
+        for (const c of todos) {
+          await dbUpdate('ClienteWhatsapp', c.id, { estado_conversa: 'identificado' });
+          await enviarMensagem(c.telefone, `Atendimento encerrado! Se precisar de mais alguma coisa, é só chamar 😊`);
+        }
+        console.log('[GATILHO] #fechar todos — liberados:', todos.length);
+        return;
+      }
+
+      // #fechar NUMERO — libera cliente específico
+      const matchFechar = cmd.match(/^#fechar\s+([\d]+)/);
+      if (matchFechar) {
+        const numFechar = matchFechar[1].replace(/\D/g, '');
+        const telFechar = numFechar.startsWith('55') ? numFechar : '55' + numFechar;
+        let listaFechar = await dbFilter('ClienteWhatsapp', { telefone: telFechar });
+        if (!Array.isArray(listaFechar) || listaFechar.length === 0) {
+          listaFechar = await dbFilter('ClienteWhatsapp', { telefone: numFechar });
+        }
+        if (Array.isArray(listaFechar) && listaFechar.length > 0) {
+          const clienteFechar = listaFechar[0];
+          await dbUpdate('ClienteWhatsapp', clienteFechar.id, { estado_conversa: 'identificado' });
+          await enviarMensagem(telFechar, `Atendimento encerrado! Se precisar de mais alguma coisa, é só chamar 😊`);
+          console.log('[GATILHO] #fechar', telFechar, '— liberado');
+        } else {
+          console.log('[GATILHO] #fechar', telFechar, '— não encontrado');
+        }
+        return;
+      }
+
+      // Outros fromMe (Rafa conversando normalmente) — ignorar
+      return;
+    }
 
     // ── Buscar cliente no banco local (múltiplos formatos de telefone) ──────────
     let cliente = null;
@@ -407,6 +455,12 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
   const nome         = primeiroNome(cliente.nome);
   const nomeCompleto = cliente.nome || 'cliente';
   const estado       = cliente.estado_conversa;
+
+  // ── MODO SILÊNCIO: cliente em atendimento humano — bot não interfere ────────
+  if (estado === 'atendente' || estado === 'atendente_novo_cliente') {
+    console.log('[SILENCIO] Cliente em atendimento humano — bot silenciado para', telefone);
+    return;
+  }
 
   // Classificar intenção via Groq
   const intencao = await classificarIntencao(mensagem);
