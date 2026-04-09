@@ -107,7 +107,8 @@ async function classificarIntencao(mensagem) {
 Analise a mensagem do cliente e responda SOMENTE com um JSON válido, sem explicações.
 
 Intenções possíveis:
-- "boleto": cliente quer segunda via, boleto, fatura, pagamento ou PIX
+- "boleto": cliente quer segunda via, boleto, fatura ou PIX
+- "pagou": cliente diz que já pagou, efetuou pagamento, realizou pagamento, fez o pix, pagou hoje
 - "suporte": cliente relata problema com internet, sem sinal, lento, caiu, equipamento, luz vermelha
 - "cancelamento": cliente quer cancelar o serviço
 - "atendente": cliente quer falar com humano, contratar novo plano, instalar, mudança de endereço
@@ -150,7 +151,8 @@ Responda exatamente neste formato JSON:
 // Fallback regex caso Groq esteja indisponível
 function classificarIntencaoFallback(msg) {
   const m = msg.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  if (m.match(/boleto|fatura|pagar|pagamento|pix|segunda via|vencimento|debito|cobranca|conta/)) return 'boleto';
+  if (m.match(/boleto|fatura|pix|segunda via|vencimento|debito|cobranca|conta/)) return 'boleto';
+  if (m.match(/j[aá] paguei|j[aá] pago|efetuei|realizei|fiz o pix|paguei hoje|paguei ontem|efetuou|realizou|confirmei pagamento/)) return 'pagou';
   if (m.match(/sem internet|sem sinal|caiu|lento|travando|sem conexao|fibra|rompimento|nao funciona|parou|reinici|modem|roteador|luz vermelha|luz piscando|vermelho|offline|net caiu|sem net|sem wifi|wifi/)) return 'suporte';
   if (m.match(/cancelar|cancelamento|quero cancelar|desistir|nao quero mais/)) return 'cancelamento';
   if (m.match(/falar com|atendente|humano|pessoa|responsavel|gerente|contrato|plano|instalar|instalacao|mudanca|mudei|quero assinar|quero contratar|novo cliente|contratar/)) return 'atendente';
@@ -162,13 +164,18 @@ function classificarIntencaoFallback(msg) {
 // ═════════════════════════════════════════════════════════════════════════════
 async function enviarMensagem(telefone, mensagem) {
   const numero = telefone.startsWith('55') ? telefone : '55' + telefone;
+
+  // Delay humanizado: ~40 chars/segundo de "digitação", entre 2 e 12 segundos
+  const chars = mensagem.replace(/\s+/g, '').length;
+  const delaySegundos = Math.min(12, Math.max(2, Math.round(chars / 40)));
+
   const res = await fetch(`${ZAPI_BASE}/send-text`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'client-token': ZAPI_CLIENT_TOKEN },
-    body: JSON.stringify({ phone: numero, message: mensagem })
+    body: JSON.stringify({ phone: numero, message: mensagem, delay: delaySegundos })
   });
   const data = await res.json();
-  console.log('[Z-API] envio:', JSON.stringify(data).substring(0, 150));
+  console.log('[Z-API] envio (delay:', delaySegundos, 's):', JSON.stringify(data).substring(0, 150));
   return data;
 }
 
@@ -176,9 +183,12 @@ async function enviarMensagem(telefone, mensagem) {
 // MÓDULO 5 — PROCESSADOR DE ENTRADA (extrai dados do webhook Z-API)
 // ═════════════════════════════════════════════════════════════════════════════
 function extrairDados(body) {
-  if (body.isGroupMsg === true || body.fromMe === true) {
-    return { telefone: '', mensagem: '', audioUrl: null };
+  if (body.isGroupMsg === true) {
+    return { telefone: '', mensagem: '', audioUrl: null, fromMe: false };
   }
+
+  // Mensagens enviadas pelo próprio número (fromMe=true) só passam se forem comandos do Rafa (#fechar)
+  const isFromMe = body.fromMe === true;
 
   let phone = String(body.phone || body.from || '').replace(/\D/g, '').replace(/@.*$/, '');
   if (phone.length === 11) phone = '55' + phone;
@@ -201,7 +211,7 @@ function extrairDados(body) {
   if (audioUrl) console.log('[AUDIO] URL detectada:', audioUrl);
   console.log('[EXTRACT]', { phone, mensagem: mensagem.substring(0, 50), audioUrl: !!audioUrl, type: body.type });
 
-  return { telefone: phone, mensagem, audioUrl };
+  return { telefone: phone, mensagem, audioUrl, fromMe: isFromMe || false };
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -243,7 +253,7 @@ app.post('/webhook', async (req, res) => {
   res.json({ ok: true }); // Responde imediatamente ao Z-API
 
   try {
-    const { telefone, mensagem: mensagemTexto, audioUrl } = extrairDados(req.body);
+    const { telefone, mensagem: mensagemTexto, audioUrl, fromMe } = extrairDados(req.body);
 
     // Transcrever áudio se necessário
     let mensagemRecebida = mensagemTexto;
@@ -262,6 +272,57 @@ app.post('/webhook', async (req, res) => {
 
     console.log('[WEBHOOK]', { telefone, msg: mensagemRecebida.substring(0, 100) });
     console.log('[TELEFONE_BRUTO]', JSON.stringify({ phone: req.body.phone, from: req.body.from, telefoneNormalizado: telefone }));
+
+    // ── Ignorar mensagens do número do Rafa (quando ele manda pelo próprio celular, não fromMe) ──
+    if (telefone === RAFA_PHONE || telefone === RAFA_PHONE.replace('55','')) {
+      console.log('[WEBHOOK] Mensagem do Rafa ignorada (não é fromMe, mas é o número dele)');
+      return;
+    }
+
+    // ── GATILHO DO RAFA: mensagens enviadas pelo próprio número ──────────────
+    // Só processa se vier do número da PSIU (fromMe=true) E for um comando #fechar
+    if (fromMe) {
+      const cmd = mensagemRecebida.trim().toLowerCase();
+
+      // #fechar todos — libera TODOS os clientes em atendimento humano
+      if (cmd === '#fechar todos') {
+        const emAtendimento = await dbFilter('ClienteWhatsapp', { estado_conversa: 'atendente' });
+        const emAtendimentoNovo = await dbFilter('ClienteWhatsapp', { estado_conversa: 'atendente_novo_cliente' });
+        const todos = [
+          ...(Array.isArray(emAtendimento) ? emAtendimento : []),
+          ...(Array.isArray(emAtendimentoNovo) ? emAtendimentoNovo : [])
+        ];
+        for (const c of todos) {
+          await dbUpdate('ClienteWhatsapp', c.id, { estado_conversa: 'identificado' });
+          await enviarMensagem(c.telefone, `Atendimento encerrado! Se precisar de mais alguma coisa, é só chamar 😊`);
+        }
+        console.log('[GATILHO] #fechar todos — liberados:', todos.length);
+        return;
+      }
+
+      // #fechar NUMERO — libera cliente específico
+      const matchFechar = cmd.match(/^#fechar\s+([\d]+)/);
+      if (matchFechar) {
+        const numFechar = matchFechar[1].replace(/\D/g, '');
+        const telFechar = numFechar.startsWith('55') ? numFechar : '55' + numFechar;
+        let listaFechar = await dbFilter('ClienteWhatsapp', { telefone: telFechar });
+        if (!Array.isArray(listaFechar) || listaFechar.length === 0) {
+          listaFechar = await dbFilter('ClienteWhatsapp', { telefone: numFechar });
+        }
+        if (Array.isArray(listaFechar) && listaFechar.length > 0) {
+          const clienteFechar = listaFechar[0];
+          await dbUpdate('ClienteWhatsapp', clienteFechar.id, { estado_conversa: 'identificado' });
+          await enviarMensagem(telFechar, `Atendimento encerrado! Se precisar de mais alguma coisa, é só chamar 😊`);
+          console.log('[GATILHO] #fechar', telFechar, '— liberado');
+        } else {
+          console.log('[GATILHO] #fechar', telFechar, '— não encontrado');
+        }
+        return;
+      }
+
+      // Outros fromMe (Rafa conversando normalmente) — ignorar
+      return;
+    }
 
     // ── Buscar cliente no banco local (múltiplos formatos de telefone) ──────────
     let cliente = null;
@@ -337,7 +398,36 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Telefone não encontrado em lugar nenhum — criar registro e pedir CPF
+    // Última tentativa: buscar no banco com variações do número (9 dígito vs 8 dígito)
+    // Ex: 5519974193785 vs 551974193785 ou 19974193785 vs 1974193785
+    const numBase = telefone.replace(/^55/, '');
+    const variacoes = [
+      numBase,
+      numBase.startsWith('0') ? numBase.slice(1) : '0' + numBase,
+      // com 9 dígito/sem 9 dígito (celular SP)
+      numBase.length === 11 ? '55' + numBase : null,
+      numBase.length === 10 ? '55' + numBase : null,
+    ].filter(Boolean);
+
+    let clienteVariacao = null;
+    for (const v of variacoes) {
+      const tentativa = await dbFilter('ClienteWhatsapp', { telefone: v });
+      if (Array.isArray(tentativa) && tentativa.length > 0 && tentativa[0].id_cliente_receitanet) {
+        clienteVariacao = tentativa[0];
+        console.log('[DB_VARIACAO] Encontrado com telefone variação:', v, '| id:', clienteVariacao.id);
+        // Atualizar para o telefone atual
+        await dbUpdate('ClienteWhatsapp', clienteVariacao.id, { telefone, ultimo_contato: new Date().toISOString() });
+        clienteVariacao.telefone = telefone;
+        break;
+      }
+    }
+
+    if (clienteVariacao) {
+      await handleClienteIdentificado(clienteVariacao, telefone, mensagemRecebida);
+      return;
+    }
+
+    // Nenhuma variação encontrada — criar registro e pedir CPF
     cliente = await dbCreate('ClienteWhatsapp', {
       telefone, identificado: false,
       ultimo_contato: new Date().toISOString(),
@@ -408,24 +498,42 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
   const nomeCompleto = cliente.nome || 'cliente';
   const estado       = cliente.estado_conversa;
 
+  // ── MODO SILÊNCIO: cliente em atendimento humano — bot não interfere ────────
+  if (estado === 'atendente' || estado === 'atendente_novo_cliente') {
+    console.log('[SILENCIO] Cliente em atendimento humano — bot silenciado para', telefone);
+    return;
+  }
+
   // Classificar intenção via Groq
   const intencao = await classificarIntencao(mensagem);
   console.log('[INTENCAO]', intencao, '| estado:', estado);
 
   // ── Detecção de massiva ───────────────────────────────────────────────────
   if (intencao === 'suporte') {
-    const trintaMinAtras = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const trintaMinAtras = new Date(Date.now() - 120 * 60 * 1000).toISOString(); // janela de 2 horas
     const todosChamados  = await dbFilter('Atendimento', { motivo: 'suporte' });
-    const recentes = Array.isArray(todosChamados)
-      ? todosChamados.filter(c => c.data_atendimento > trintaMinAtras).length
-      : 0;
+    // Contar apenas CLIENTES DIFERENTES (excluindo o próprio) nos últimos 30min
+    // Excluir o próprio cliente E o número do Rafa do contador de massiva
+    const clientesRecentes = Array.isArray(todosChamados)
+      ? [...new Set(
+          todosChamados
+            .filter(c => c.data_atendimento > trintaMinAtras
+                      && c.telefone !== telefone
+                      && c.telefone !== RAFA_PHONE
+                      && c.telefone !== RAFA_PHONE.replace('55',''))
+            .map(c => c.telefone)
+        )]
+      : [];
+    const totalClientesDiferentes = clientesRecentes.length;
 
-    if (recentes >= 3) {
+    console.log('[MASSIVA] Clientes diferentes nos últimos 30min (excluindo o atual):', totalClientesDiferentes);
+
+    if (totalClientesDiferentes >= 3) {
       await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'massiva' });
       await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'massiva', false);
       await enviarMensagem(telefone, `Oi, *${nome}*! 😔 Identificamos uma instabilidade na rede que pode estar afetando sua região.\n\nNossa equipe já foi acionada e está trabalhando na resolução.\n\n⏱️ *Previsão: até 5 horas* — te avisamos assim que normalizar. Pedimos desculpas! 🙏`);
-      if (recentes === 3) {
-        await alertarRafa('🚨🚨🚨', 'MASSIVA DETECTADA!', nomeCompleto, telefone, `👥 Clientes afetados: *${recentes + 1}*\n\nVários clientes estão sem internet! Verifique com URGÊNCIA.\n⚡ Clientes já sendo avisados automaticamente.`);
+      if (totalClientesDiferentes === 3) {
+        await alertarRafa('🚨🚨🚨', 'MASSIVA DETECTADA!', nomeCompleto, telefone, `👥 Clientes afetados: *${totalClientesDiferentes + 1}*\n\nVários clientes estão sem internet! Verifique com URGÊNCIA.\n⚡ Clientes já sendo avisados automaticamente.`);
       }
       return;
     }
@@ -443,6 +551,18 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
     return;
   }
 
+  // ── Estado: aguardando confirmação de liberação em confiança ──────────────
+  if (estado === 'aguardando_liberacao') {
+    const m = mensagem.toLowerCase();
+    if (m.match(/sim|quero|pode|libera|confirmo|s[iì]m|yes|ok|certo/)) {
+      return handleLiberacaoConfirmada(cliente, telefone, nome, nomeCompleto, idCliente);
+    } else {
+      await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+      await enviarMensagem(telefone, `Tudo bem, *${nome}*! Quando o pagamento compensar no sistema, sua conexão será liberada automaticamente. Se precisar de mais alguma coisa, é só chamar 😊`);
+      return;
+    }
+  }
+
   // ── Estado: retenção de cancelamento ─────────────────────────────────────
   if (estado === 'cancelamento_retencao' && intencao !== 'boleto' && intencao !== 'suporte') {
     return handleRetencao(cliente, telefone, mensagem, nome);
@@ -450,6 +570,7 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
 
   // ── Intenções principais ──────────────────────────────────────────────────
   if (intencao === 'boleto')       return handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente);
+  if (intencao === 'pagou')        return handlePagou(cliente, telefone, nome, nomeCompleto, idCliente);
   if (intencao === 'suporte')      return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
   if (intencao === 'cancelamento') return handleCancelamento(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
   if (intencao === 'atendente')    return handleAtendente(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
@@ -500,8 +621,19 @@ async function handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente) {
 
 async function handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente) {
   const luzVermelha = mensagem.toLowerCase().match(/luz vermelha|vermelho|piscando/);
-  const dadosEquip  = await buscarClientePorId(idCliente);
-  const equipOnline = dadosEquip.success && dadosEquip.contratos && !dadosEquip.contratos.servidor?.isManutencao;
+
+  // Buscar por CPF (mais confiável que busca por idCliente que pode retornar cliente errado)
+  const cpf = cliente.cpf_cnpj ? cliente.cpf_cnpj.replace(/\D/g, '') : null;
+  const dadosEquip = cpf ? await buscarClientePorCpf(cpf) : await buscarClientePorId(idCliente);
+
+  // Receitanet pode retornar contratos como objeto ou array — normalizar
+  const contrato = dadosEquip.success
+    ? (Array.isArray(dadosEquip.contratos) ? dadosEquip.contratos[0] : dadosEquip.contratos)
+    : null;
+
+  // Equipamento online = tem IP atribuído (PPPoE conectado). ip null = offline.
+  const equipOnline = contrato?.servidor?.ip !== null && contrato?.servidor?.ip !== undefined && contrato?.servidor?.ip !== '';
+  console.log('[EQUIP] cpf:', cpf, '| ip:', contrato?.servidor?.ip, '| online:', equipOnline, '| isManutencao:', contrato?.servidor?.isManutencao);
 
   const chamado   = await abrirChamado(idCliente, telefone);
   const protocolo = chamado.protocolo || chamado.idSuporte || 'gerado';
@@ -518,6 +650,86 @@ async function handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, id
   } else {
     await enviarMensagem(telefone, `*${nome}*, seu equipamento está *offline* no nosso sistema. 📡\n\nTenta reiniciar: *desliga o roteador da tomada por 30 segundos e liga novamente.*\n\nJá abri um chamado (protocolo: ${protocolo}). Se não resolver, nossa equipe entra em contato! 🔧`);
     await alertarRafa('🔴', 'CHAMADO DE CAMPO', nomeCompleto, telefone, `Equipamento *offline*.\n📋 Protocolo: ${protocolo}`);
+  }
+}
+
+async function handlePagou(cliente, telefone, nome, nomeCompleto, idCliente) {
+  const cpf = cliente.cpf_cnpj ? cliente.cpf_cnpj.replace(/\D/g, '') : null;
+  const dados = cpf ? await buscarClientePorCpf(cpf) : await buscarClientePorId(idCliente);
+  const contrato = dados.success
+    ? (Array.isArray(dados.contratos) ? dados.contratos[0] : dados.contratos)
+    : null;
+
+  // Verificar se o cliente usa liberação em confiança e se ainda pode usar
+  const podeLiberar = contrato?.clienteLiberadoConfianca === 0 && contrato?.usouLiberacaoConfianca === 0;
+  const jaLiberado  = contrato?.clienteLiberadoConfianca === 1;
+  const jaUsou      = contrato?.usouLiberacaoConfianca === 1;
+  const valorAberto = parseFloat(contrato?.contratoValorAberto || 0);
+  const temDebito   = valorAberto > 0;
+
+  console.log('[PAGOU] podeLiberar:', podeLiberar, '| jaLiberado:', jaLiberado, '| jaUsou:', jaUsou, '| valorAberto:', valorAberto);
+
+  if (!contrato || !temDebito) {
+    // Sem débito — já está pago
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+    await enviarMensagem(telefone, `*${nome}*, não encontrei nenhum débito em aberto no seu cadastro. Tudo certo por aqui! ✅\n\nSe a conexão não voltou, pode ser processamento do banco. Tenta reiniciar o roteador 😊`);
+    return;
+  }
+
+  if (jaLiberado) {
+    // Já está em liberação
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+    await enviarMensagem(telefone, `*${nome}*, sua liberação em confiança já está ativa! Quando o pagamento compensar o sistema atualiza automaticamente. ✅`);
+    return;
+  }
+
+  if (jaUsou && !podeLiberar) {
+    // Já usou a liberação antes
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+    await enviarMensagem(telefone, `*${nome}*, infelizmente você já utilizou a liberação em confiança anteriormente. Nossa equipe vai verificar o pagamento manualmente e liberar assim que confirmado! ⏳\n\nSe tiver comprovante, pode enviar aqui 😊`);
+    await alertarRafa('💰', 'CLIENTE DISSE QUE PAGOU', nomeCompleto, telefone, `Débito: R$ ${valorAberto.toFixed(2)}\nJÁ USOU liberação em confiança antes — verificar manualmente!`);
+    return;
+  }
+
+  // Pode liberar — perguntar se quer
+  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_liberacao' });
+  await enviarMensagem(telefone, `Que ótimo, *${nome}*! 🎉\n\nAinda identifico um valor de *R$ ${valorAberto.toFixed(2).replace('.', ',')}* em aberto no sistema. Enquanto o pagamento não compensa, posso fazer uma *liberação em confiança* para sua internet voltar agora mesmo.\n\nDeseja que eu libere sua conexão? (Sim / Não)`);
+}
+
+async function handleLiberacaoConfirmada(cliente, telefone, nome, nomeCompleto, idCliente) {
+  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+  await enviarMensagem(telefone, `Perfeito, *${nome}*! Aguarda um momento enquanto processo a liberação... ⚙️`);
+
+  try {
+    const cpf = cliente.cpf_cnpj ? cliente.cpf_cnpj.replace(/\D/g, '') : null;
+    const dados = cpf ? await buscarClientePorCpf(cpf) : await buscarClientePorId(idCliente);
+    const contrato = dados.success
+      ? (Array.isArray(dados.contratos) ? dados.contratos[0] : dados.contratos)
+      : null;
+    const idContrato = contrato?.idContrato;
+
+    if (!idContrato) throw new Error('idContrato não encontrado');
+
+    // Chamar endpoint de liberação em confiança do Receitanet chatbot
+    const respLib = await fetch(`${RECEITANET_BASE}/liberacao-confianca`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: RECEITANET_TOKEN, app: 'chatbot', idContrato })
+    });
+    const libData = await respLib.json().catch(() => null);
+    console.log('[LIBERACAO] Resposta:', JSON.stringify(libData));
+
+    if (libData?.success) {
+      await registrarAtendimento(telefone, nomeCompleto, idCliente, 'liberacao_confianca', '', 'resolvido', true);
+      await enviarMensagem(telefone, `✅ *${nome}*, sua conexão foi liberada em confiança!\n\nSua internet deve voltar em alguns minutos. Reinicia o roteador se ainda não voltar.\n\nObrigado por ser nosso cliente! 💙`);
+    } else {
+      throw new Error(libData?.msg || 'Falha na liberação');
+    }
+  } catch (err) {
+    console.error('[LIBERACAO] Erro:', err.message);
+    await registrarAtendimento(telefone, nomeCompleto, idCliente, 'liberacao_confianca', '', 'erro_api', false);
+    await enviarMensagem(telefone, `*${nome}*, não consegui processar a liberação automaticamente agora. Nossa equipe vai verificar manualmente e te liberar em breve! 🙏`);
+    await alertarRafa('💰', 'LIBERAÇÃO EM CONFIANÇA SOLICITADA', nomeCompleto, telefone, `Cliente confirmou pagamento e pediu liberação em confiança.\nLIBERAR MANUALMENTE no painel do Receitanet!`);
   }
 }
 
@@ -555,6 +767,25 @@ async function handleAtendente(cliente, telefone, mensagem, nome, nomeCompleto, 
   await enviarMensagem(telefone, msg);
   await alertarRafa('👤', 'CLIENTE QUER ATENDENTE', nomeCompleto, telefone, `Solicitou atendimento humano.`);
 }
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ENDPOINT /encerrar — chamado pelo painel para encerrar atendimento humano
+// ═════════════════════════════════════════════════════════════════════════════
+app.post('/encerrar', async (req, res) => {
+  try {
+    const { telefone } = req.body;
+    if (!telefone) return res.json({ ok: false, error: 'telefone obrigatório' });
+
+    const tel = telefone.startsWith('55') ? telefone : '55' + telefone;
+    await enviarMensagem(tel, `Atendimento encerrado! Se precisar de mais alguma coisa, é só chamar 😊`);
+    console.log('[ENCERRAR] Mensagem enviada para', tel);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[ENCERRAR] Erro:', err.message);
+    res.json({ ok: false, error: err.message });
+  }
+});
 
 // ═════════════════════════════════════════════════════════════════════════════
 // START
