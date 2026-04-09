@@ -275,26 +275,92 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// ── Fluxo: número não encontrado no Receitanet (possível novo cliente) ────────
+// ── Fluxo: número não encontrado no Receitanet ───────────────────────────────
 async function handleNaoCliente(cliente, telefone, mensagem) {
   const intencao = classificarIntencao(mensagem);
+  const estado   = cliente.estado_conversa;
 
-  // Se quer contratar — encaminhar direto para atendente
+  // ── Se já está aguardando CPF — tentar identificar ───────────────────────
+  if (estado === 'aguardando_cpf') {
+    const cpf = mensagem.replace(/\D/g, '');
+    if (cpf.length >= 11) {
+      const resultado = await buscarClientePorCpf(cpf);
+      if (resultado.success && resultado.contratos?.idCliente) {
+        const dados = {
+          telefone,
+          id_cliente_receitanet: String(resultado.contratos.idCliente),
+          nome: resultado.contratos.razaoSocial || '',
+          cpf_cnpj: cpf,
+          identificado: true,
+          ultimo_contato: new Date().toISOString(),
+          estado_conversa: 'identificado'
+        };
+        await dbUpdate('ClienteWhatsapp', cliente.id, dados);
+        cliente = { ...cliente, ...dados };
+        // Identificado — processar a mensagem original como cliente
+        const nome = primeiroNome(cliente.nome);
+        await enviarMensagem(telefone, `Ótimo, *${nome}*! Encontrei seu cadastro! 😊\n\nComo posso te ajudar?\n\n💰 *Boleto* — segunda via e PIX\n🔧 *Suporte* — problemas com internet\n👤 *Atendente* — falar com nossa equipe`);
+        return;
+      } else {
+        // CPF não encontrado
+        await enviarMensagem(telefone, `Não encontrei nenhum cadastro com esse CPF. 😕\n\nVerifica se está correto ou fala com nossa equipe por aqui mesmo! 😊`);
+        return;
+      }
+    } else {
+      // Não parece um CPF — pedir novamente
+      await enviarMensagem(telefone, `Me passa o *CPF ou CNPJ* (só os números) pra eu localizar seu cadastro 😊`);
+      return;
+    }
+  }
+
+  // ── Detectar CPF direto na mensagem (sem precisar pedir) ─────────────────
+  const cpfDireto = mensagem.replace(/\D/g, '');
+  if (cpfDireto.length >= 11 && cpfDireto.length <= 14) {
+    const resultado = await buscarClientePorCpf(cpfDireto);
+    if (resultado.success && resultado.contratos?.idCliente) {
+      const dados = {
+        telefone,
+        id_cliente_receitanet: String(resultado.contratos.idCliente),
+        nome: resultado.contratos.razaoSocial || '',
+        cpf_cnpj: cpfDireto,
+        identificado: true,
+        ultimo_contato: new Date().toISOString(),
+        estado_conversa: 'identificado'
+      };
+      await dbUpdate('ClienteWhatsapp', cliente.id, dados);
+      cliente = { ...cliente, ...dados };
+      const nome = primeiroNome(cliente.nome);
+      await enviarMensagem(telefone, `Olá, *${nome}*! Encontrei seu cadastro! 😊\n\nComo posso te ajudar?\n\n💰 *Boleto* — segunda via e PIX\n🔧 *Suporte* — problemas com internet\n👤 *Atendente* — falar com nossa equipe`);
+      return;
+    }
+  }
+
+  // ── Cliente diz que já é cliente mas telefone não bateu — pedir CPF ──────
+  const m = mensagem.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const ehCliente = m.match(/ja sou|já sou|sou cliente|cliente|meu cpf|cpf|cnpj|cadastro|minha conta|meu contrato/);
+
+  if (ehCliente || intencao === 'boleto' || intencao === 'suporte' || intencao === 'cancelamento') {
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_cpf', ultimo_contato: new Date().toISOString() });
+    await enviarMensagem(telefone, `Não encontrei seu número no cadastro. Pode me passar seu *CPF ou CNPJ* para eu te localizar? 😊`);
+    return;
+  }
+
+  // ── Quer contratar — encaminhar para atendente ────────────────────────────
   if (intencao === 'atendente') {
     await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'atendente_novo_cliente' });
     await registrarAtendimento(telefone, 'Novo Cliente', null, 'novo_cliente', mensagem, 'encaminhado_atendente', false);
-
     const msg = atendenteDisponivel()
       ? `Olá! 👋 Que ótimo que você quer conhecer a PSIU!\n\nVou te conectar com nosso time agora. Um atendente entrará em contato em breve! 😊`
       : `Olá! 👋 Que ótimo que você quer conhecer a PSIU!\n\nNosso horário de atendimento é *seg-sex das 9h às 20h*. Assim que nossa equipe chegar, entraremos em contato! 😊`;
-
     await enviarMensagem(telefone, msg);
     await alertarRafa('🆕', 'NOVO CLIENTE INTERESSADO', 'Novo Cliente', telefone, `📲 Quer contratar a PSIU! Entre em contato.`);
     return;
   }
 
-  // Para qualquer outra mensagem — orientar a entrar em contato
-  await enviarMensagem(telefone, `Olá! 👋 Seja bem-vindo(a) à *PSIU TELECOM*!\n\nNão encontrei seu número em nossa base de clientes. Se quiser contratar nossos serviços ou falar com nossa equipe, é só dizer! 😊`);
+  // ── Primeira mensagem genérica — apresentar e aguardar ───────────────────
+  await dbUpdate('ClienteWhatsapp', cliente.id, { ultimo_contato: new Date().toISOString() });
+  await enviarMensagem(telefone, `Olá! 👋 Seja bem-vindo(a) à *PSIU TELECOM*!\n\nSe você já é nosso cliente, me passa seu *CPF ou CNPJ* que te localizo rapidinho 😊\n\nSe quiser contratar, é só dizer!`);
+  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_cpf' });
 }
 
 // ── Fluxo: cliente identificado ───────────────────────────────────────────────
