@@ -212,7 +212,7 @@ app.post('/webhook', async (req, res) => {
       await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'menu' });
       await dbCreate('Atendimento', { telefone, nome_cliente: nome, id_cliente_receitanet: idCliente, motivo: 'suporte', mensagem_original: mensagemRecebida, estado_final: 'chamado_aberto', data_atendimento: new Date().toISOString(), resolvido: false });
       if (chamado.success) {
-        await enviarMensagem(telefone, `🔧 *${nome}*, chamado de suporte aberto com sucesso!\n\n📋 Número: *${chamado.numero || chamado.id || 'gerado'}*\n\nNossa equipe técnica foi notificada e entrará em contato em breve. ⏱️`);
+        await enviarMensagem(telefone, `🔧 *${nome}*, chamado de suporte aberto com sucesso!\n\n📋 Número: *${chamado.protocolo || chamado.idSuporte || 'gerado'}*\n\nNossa equipe técnica foi notificada e entrará em contato em breve. ⏱️`);
       } else {
         await enviarMensagem(telefone, `🔧 Vou acionar nossa equipe técnica para você, *${nome}*!\n\nUm técnico entrará em contato em breve. Se preferir falar agora, ligue: *0800-xxx-xxxx*`);
       }
