@@ -511,10 +511,14 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
     const trintaMinAtras = new Date(Date.now() - 120 * 60 * 1000).toISOString(); // janela de 2 horas
     const todosChamados  = await dbFilter('Atendimento', { motivo: 'suporte' });
     // Contar apenas CLIENTES DIFERENTES (excluindo o próprio) nos últimos 30min
+    // Excluir o próprio cliente E o número do Rafa do contador de massiva
     const clientesRecentes = Array.isArray(todosChamados)
       ? [...new Set(
           todosChamados
-            .filter(c => c.data_atendimento > trintaMinAtras && c.telefone !== telefone)
+            .filter(c => c.data_atendimento > trintaMinAtras
+                      && c.telefone !== telefone
+                      && c.telefone !== RAFA_PHONE
+                      && c.telefone !== RAFA_PHONE.replace('55',''))
             .map(c => c.telefone)
         )]
       : [];
