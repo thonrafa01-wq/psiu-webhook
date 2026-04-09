@@ -147,7 +147,10 @@ function extrairDados(body) {
   if (body.isGroupMsg === true) return { telefone: '', mensagem: '' };
   if (body.fromMe === true) return { telefone: '', mensagem: '' };
 
-  const phone = String(body.phone || body.from || '').replace(/\D/g, '');
+  let phone = String(body.phone || body.from || '').replace(/\D/g, '').replace(/@.*$/, '');
+  // Garantir formato 55 + DDD + número
+  if (phone.length === 11) phone = '55' + phone; // sem código do país
+  if (phone.length === 10) phone = '55' + phone;  // sem dígito 9
   let mensagem = '';
   if (body.text && typeof body.text === 'object') {
     mensagem = String(body.text.message || '');
@@ -199,8 +202,17 @@ app.post('/webhook', async (req, res) => {
       return res.json({ ok: true, msg: 'sem dados relevantes' });
     }
 
-    // Buscar cliente local no Base44
-    const clientesLocal = await dbFilter('ClienteWhatsapp', { telefone });
+    // Buscar cliente local no Base44 (tentar variações do telefone)
+    let clientesLocal = await dbFilter('ClienteWhatsapp', { telefone });
+    if (!Array.isArray(clientesLocal) || clientesLocal.length === 0) {
+      // Tentar sem o 55
+      const telSem55 = telefone.startsWith('55') ? telefone.slice(2) : telefone;
+      clientesLocal = await dbFilter('ClienteWhatsapp', { telefone: telSem55 });
+      // Se achou sem 55, atualizar para formato completo
+      if (Array.isArray(clientesLocal) && clientesLocal.length > 0) {
+        await dbUpdate('ClienteWhatsapp', clientesLocal[0].id, { telefone });
+      }
+    }
     let clienteLocal = Array.isArray(clientesLocal) && clientesLocal.length > 0 ? clientesLocal[0] : null;
 
     // ── Cliente não identificado ──────────────────────────────────────────────
