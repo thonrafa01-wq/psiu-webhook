@@ -111,7 +111,9 @@ Analise a mensagem do cliente e responda SOMENTE com um JSON válido, sem explic
 Intenções possíveis:
 - "boleto": cliente quer segunda via, boleto, fatura ou PIX
 - "pagou": cliente diz que já pagou, efetuou pagamento, realizou pagamento, fez o pix, pagou hoje
-- "suporte": cliente relata problema com internet, sem sinal, lento, caiu, equipamento, luz vermelha
+- "suporte": cliente relata problema ATUAL com internet, sem sinal, lento, caiu, equipamento, luz vermelha
+- "resolvido": cliente diz que o problema foi resolvido, voltou, funcionou, conexão voltou, está ok agora
+- "verificar_conexao": cliente quer saber o status da conexão, pede pra verificar se está online
 - "cancelamento": cliente quer cancelar o serviço
 - "atendente": cliente quer falar com humano, contratar novo plano, instalar, mudança de endereço
 - "outro": qualquer outra coisa
@@ -542,22 +544,28 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
   }
 
   // ── Estado: chamado aberto — aguardando feedback ──────────────────────────
-  if (estado === 'chamado_aberto' && intencao !== 'suporte' && intencao !== 'boleto') {
+  if (estado === 'chamado_aberto' && intencao !== 'boleto') {
     const m = mensagem.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    if (m.match(/funcionou|resolveu|voltou|ta ok|ta ok|ok|certo|funcionando|obrigad/)) {
+    const foiResolvido = intencao === 'resolvido' || m.match(/funcionou|resolveu|voltou|ta ok|tudo ok|tudo certo|ok|certo|funcionando|obrigad|resolvido|voltou a conexao|conexao voltou|aqui voltou|voltou aqui|ja voltou|internet voltou/);
+    const querVerificar = intencao === 'verificar_conexao' || m.match(/verifica|verificar|conexao|online|offline|status|sinal|internet|minha net|minha conexao/);
+
+    if (foiResolvido) {
       await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
-      await enviarMensagem(telefone, `Ótimo, *${nome}*! Fico feliz que resolveu! 😄\n\nSe precisar de mais alguma coisa, é só falar! 🙌`);
-    } else if (m.match(/verifica|verificar|conexao|online|offline|status|sinal|internet|minha net|minha conexao/)) {
-      // Cliente quer saber o status da conexão — consultar API em tempo real
+      await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'resolvido', true);
+      await enviarMensagem(telefone, `Que ótimo, *${nome}*! Fico feliz que voltou! 😄\n\nSe precisar de mais alguma coisa, é só falar! 🙌`);
+    } else if (querVerificar) {
       const acesso = await verificarAcesso(idCliente, telefone);
       const statusAcesso = acesso?.status;
       if (statusAcesso === 1) {
-        await enviarMensagem(telefone, `*${nome}*, verifiquei agora: seu equipamento está *online* no nosso sistema! ✅\n\nSe ainda estiver sem internet, tenta reiniciar o roteador: desliga da tomada por 30 segundos e liga novamente. Nossa equipe também está acompanhando! 🔧`);
+        await enviarMensagem(telefone, `*${nome}*, verifiquei agora: seu equipamento está *online* ✅\n\nSe ainda estiver com instabilidade, tenta reiniciar o roteador: desliga da tomada por 30 segundos e liga novamente. Nossa equipe também está acompanhando! 🔧`);
       } else if (statusAcesso === 2) {
         await enviarMensagem(telefone, `*${nome}*, seu equipamento ainda aparece *offline* no nosso sistema. 📡\n\nNossa equipe técnica já foi acionada e vai entrar em contato em breve! Se quiser falar com um atendente agora, é só dizer.`);
       } else {
         await enviarMensagem(telefone, `*${nome}*, não consegui verificar o status agora. Nossa equipe já está ciente e vai te contatar em breve! 🔧`);
       }
+    } else if (intencao === 'suporte') {
+      // Novo relato de problema com chamado já aberto — informar que já tem chamado aberto
+      await enviarMensagem(telefone, `Entendi, *${nome}*. Já temos um chamado aberto para você e nossa equipe técnica está trabalhando nisso! 🔧\n\nSe quiser falar com um atendente, é só dizer.`);
     } else {
       await enviarMensagem(telefone, `Entendi, *${nome}*. Nossa equipe técnica já está ciente e vai entrar em contato em breve! 🔧\n\nSe quiser falar com um atendente, é só dizer.`);
     }
