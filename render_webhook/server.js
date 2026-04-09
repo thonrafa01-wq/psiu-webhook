@@ -470,16 +470,24 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
   if (intencao === 'suporte') {
     const trintaMinAtras = new Date(Date.now() - 30 * 60 * 1000).toISOString();
     const todosChamados  = await dbFilter('Atendimento', { motivo: 'suporte' });
-    const recentes = Array.isArray(todosChamados)
-      ? todosChamados.filter(c => c.data_atendimento > trintaMinAtras).length
-      : 0;
+    // Contar apenas CLIENTES DIFERENTES (excluindo o próprio) nos últimos 30min
+    const clientesRecentes = Array.isArray(todosChamados)
+      ? [...new Set(
+          todosChamados
+            .filter(c => c.data_atendimento > trintaMinAtras && c.telefone !== telefone)
+            .map(c => c.telefone)
+        )]
+      : [];
+    const totalClientesDiferentes = clientesRecentes.length;
 
-    if (recentes >= 3) {
+    console.log('[MASSIVA] Clientes diferentes nos últimos 30min (excluindo o atual):', totalClientesDiferentes);
+
+    if (totalClientesDiferentes >= 3) {
       await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'massiva' });
       await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'massiva', false);
       await enviarMensagem(telefone, `Oi, *${nome}*! 😔 Identificamos uma instabilidade na rede que pode estar afetando sua região.\n\nNossa equipe já foi acionada e está trabalhando na resolução.\n\n⏱️ *Previsão: até 5 horas* — te avisamos assim que normalizar. Pedimos desculpas! 🙏`);
-      if (recentes === 3) {
-        await alertarRafa('🚨🚨🚨', 'MASSIVA DETECTADA!', nomeCompleto, telefone, `👥 Clientes afetados: *${recentes + 1}*\n\nVários clientes estão sem internet! Verifique com URGÊNCIA.\n⚡ Clientes já sendo avisados automaticamente.`);
+      if (totalClientesDiferentes === 3) {
+        await alertarRafa('🚨🚨🚨', 'MASSIVA DETECTADA!', nomeCompleto, telefone, `👥 Clientes afetados: *${totalClientesDiferentes + 1}*\n\nVários clientes estão sem internet! Verifique com URGÊNCIA.\n⚡ Clientes já sendo avisados automaticamente.`);
       }
       return;
     }
