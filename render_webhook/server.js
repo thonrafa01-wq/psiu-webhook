@@ -396,7 +396,36 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Telefone não encontrado em lugar nenhum — criar registro e pedir CPF
+    // Última tentativa: buscar no banco com variações do número (9 dígito vs 8 dígito)
+    // Ex: 5519974193785 vs 551974193785 ou 19974193785 vs 1974193785
+    const numBase = telefone.replace(/^55/, '');
+    const variacoes = [
+      numBase,
+      numBase.startsWith('0') ? numBase.slice(1) : '0' + numBase,
+      // com 9 dígito/sem 9 dígito (celular SP)
+      numBase.length === 11 ? '55' + numBase : null,
+      numBase.length === 10 ? '55' + numBase : null,
+    ].filter(Boolean);
+
+    let clienteVariacao = null;
+    for (const v of variacoes) {
+      const tentativa = await dbFilter('ClienteWhatsapp', { telefone: v });
+      if (Array.isArray(tentativa) && tentativa.length > 0 && tentativa[0].id_cliente_receitanet) {
+        clienteVariacao = tentativa[0];
+        console.log('[DB_VARIACAO] Encontrado com telefone variação:', v, '| id:', clienteVariacao.id);
+        // Atualizar para o telefone atual
+        await dbUpdate('ClienteWhatsapp', clienteVariacao.id, { telefone, ultimo_contato: new Date().toISOString() });
+        clienteVariacao.telefone = telefone;
+        break;
+      }
+    }
+
+    if (clienteVariacao) {
+      await handleClienteIdentificado(clienteVariacao, telefone, mensagemRecebida);
+      return;
+    }
+
+    // Nenhuma variação encontrada — criar registro e pedir CPF
     cliente = await dbCreate('ClienteWhatsapp', {
       telefone, identificado: false,
       ultimo_contato: new Date().toISOString(),
