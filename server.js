@@ -262,23 +262,30 @@ app.post('/webhook', async (req, res) => {
 
     console.log('[WEBHOOK]', { telefone, msg: mensagemRecebida.substring(0, 100) });
 
-    // ── Buscar cliente no banco local ─────────────────────────────────────────
-    let lista = await dbFilter('ClienteWhatsapp', { telefone });
+    // ── Buscar cliente no banco local (múltiplos formatos de telefone) ──────────
+    let cliente = null;
 
-    // Fallback: sem prefixo 55
-    if (!Array.isArray(lista) || lista.length === 0) {
+    // Tentar com telefone completo (55...)
+    let lista = await dbFilter('ClienteWhatsapp', { telefone });
+    if (Array.isArray(lista) && lista.length > 0) cliente = lista[0];
+
+    // Tentar sem prefixo 55
+    if (!cliente) {
       const telSem55 = telefone.startsWith('55') ? telefone.slice(2) : telefone;
       lista = await dbFilter('ClienteWhatsapp', { telefone: telSem55 });
       if (Array.isArray(lista) && lista.length > 0) {
-        await dbUpdate('ClienteWhatsapp', lista[0].id, { telefone });
+        cliente = lista[0];
+        // Normalizar telefone no banco
+        await dbUpdate('ClienteWhatsapp', cliente.id, { telefone });
+        cliente.telefone = telefone;
       }
     }
 
-    let cliente = Array.isArray(lista) && lista.length > 0 ? lista[0] : null;
+    console.log('[SESSAO] cliente encontrado no banco:', cliente ? `id=${cliente.id} identificado=${cliente.identificado} id_receitanet=${cliente.id_cliente_receitanet}` : 'NÃO');
 
-    // ── Rota 1: cliente já identificado no banco ───────────────────────────────
+    // ── ROTA 1: cliente JÁ identificado no banco → atender direto ─────────────
+    // Esta é a rota principal. Se temos id_cliente_receitanet, NUNCA pedimos CPF.
     if (cliente?.id_cliente_receitanet) {
-      // Garantir flags corretas
       if (!cliente.identificado) {
         await dbUpdate('ClienteWhatsapp', cliente.id, { identificado: true, estado_conversa: 'identificado' });
         cliente = { ...cliente, identificado: true, estado_conversa: 'identificado' };
@@ -288,7 +295,30 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // ── Rota 2: tentar identificar pelo telefone no Receitanet ────────────────
+    // ── ROTA 2: cliente no banco mas SEM id_receitanet → tentar pelo telefone ──
+    if (cliente && !cliente.id_cliente_receitanet) {
+      const resultadoTel = await buscarClientePorTelefone(telefone);
+      if (resultadoTel.success && resultadoTel.contratos?.idCliente) {
+        const dados = {
+          telefone,
+          id_cliente_receitanet: String(resultadoTel.contratos.idCliente),
+          nome: resultadoTel.contratos.razaoSocial || '',
+          cpf_cnpj: resultadoTel.contratos.cpfCnpj || '',
+          identificado: true,
+          ultimo_contato: new Date().toISOString(),
+          estado_conversa: 'identificado'
+        };
+        await dbUpdate('ClienteWhatsapp', cliente.id, dados);
+        cliente = { ...cliente, ...dados };
+        await handleClienteIdentificado(cliente, telefone, mensagemRecebida);
+        return;
+      }
+      // Telefone ainda não bate — ir para identificação por CPF
+      await handleIdentificacaoPorCpf(cliente, telefone, mensagemRecebida);
+      return;
+    }
+
+    // ── ROTA 3: cliente NOVO (nunca visto) → tentar telefone, depois CPF ──────
     const resultadoTel = await buscarClientePorTelefone(telefone);
     if (resultadoTel.success && resultadoTel.contratos?.idCliente) {
       const dados = {
@@ -300,24 +330,17 @@ app.post('/webhook', async (req, res) => {
         ultimo_contato: new Date().toISOString(),
         estado_conversa: 'identificado'
       };
-      if (cliente) {
-        await dbUpdate('ClienteWhatsapp', cliente.id, dados);
-        cliente = { ...cliente, ...dados };
-      } else {
-        cliente = await dbCreate('ClienteWhatsapp', dados);
-      }
+      cliente = await dbCreate('ClienteWhatsapp', dados);
       await handleClienteIdentificado(cliente, telefone, mensagemRecebida);
       return;
     }
 
-    // ── Rota 3: telefone não encontrado — fluxo de identificação por CPF ──────
-    if (!cliente) {
-      cliente = await dbCreate('ClienteWhatsapp', {
-        telefone, identificado: false,
-        ultimo_contato: new Date().toISOString(),
-        estado_conversa: 'aguardando_cpf'
-      });
-    }
+    // Telefone não encontrado em lugar nenhum — criar registro e pedir CPF
+    cliente = await dbCreate('ClienteWhatsapp', {
+      telefone, identificado: false,
+      ultimo_contato: new Date().toISOString(),
+      estado_conversa: 'aguardando_cpf'
+    });
     await handleIdentificacaoPorCpf(cliente, telefone, mensagemRecebida);
 
   } catch (err) {
