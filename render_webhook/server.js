@@ -596,6 +596,25 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
   if (intencao === 'cancelamento') return handleCancelamento(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
   if (intencao === 'atendente')    return handleAtendente(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
 
+  if (intencao === 'verificar_conexao') {
+    const acesso = await verificarAcesso(idCliente, telefone);
+    const statusAcesso = acesso?.status;
+    if (statusAcesso === 1) {
+      await enviarMensagem(telefone, `*${nome}*, verifiquei agora: seu equipamento está *online* ✅\n\nSe estiver com alguma instabilidade, tenta reiniciar o roteador: desliga da tomada por 30 segundos e liga novamente. Se persistir, é só falar que abro um chamado! 🔧`);
+    } else if (statusAcesso === 2) {
+      return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
+    } else {
+      await enviarMensagem(telefone, `*${nome}*, não consegui verificar o status agora. Se estiver com problema de internet, me diga e abro um chamado técnico! 🔧`);
+    }
+    return;
+  }
+
+  if (intencao === 'resolvido') {
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+    await enviarMensagem(telefone, `Que ótimo, *${nome}*! 😄 Se precisar de mais alguma coisa, é só falar! 🙌`);
+    return;
+  }
+
   // ── Mensagem não reconhecida ──────────────────────────────────────────────
   await enviarMensagem(telefone, `Oi, *${nome}*! 😊 Como posso te ajudar?\n\n💰 *Boleto* — segunda via e PIX\n🔧 *Suporte* — problemas com internet\n👤 *Atendente* — falar com nossa equipe`);
 }
