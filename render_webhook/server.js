@@ -68,7 +68,7 @@ async function buscarClientePorCpf(cpfcnpj) {
 async function buscarBoletos(idCliente, contato) {
   const res = await fetch(`${RECEITANET_BASE}/boletos`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: RECEITANET_CHATBOT_TOKEN, app: 'chatbot', idCliente, contato, tipo: 'whatsapp' })
+    body: JSON.stringify({ token: RECEITANET_CHATBOT_TOKEN, app: 'chatbot', idCliente, contato, tipo: 'sms' })
   });
   return await res.json();
 }
