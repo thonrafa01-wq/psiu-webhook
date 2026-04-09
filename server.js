@@ -195,8 +195,8 @@ app.post('/update-token', (req, res) => {
   if (secret !== REFRESH_SECRET) return res.status(403).json({ error: 'Unauthorized' });
   if (!token) return res.status(400).json({ error: 'Token required' });
   BASE44_SERVICE_TOKEN_DYNAMIC = token;
-  console.log('[TOKEN] Token atualizado dinamicamente às', new Date().toISOString());
-  res.json({ ok: true, updated: new Date().toISOString() });
+  console.log('[TOKEN] Token atualizado às', new Date().toISOString());
+  res.json({ ok: true });
 });
 
 app.get('/', (req, res) => res.send('PSIU TELECOM Webhook - OK'));
