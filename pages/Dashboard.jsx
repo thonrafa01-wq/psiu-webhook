@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Atendimento, ClienteWhatsapp } from "@/api/entities";
 
-const SENHA_CORRETA = "7zvn87C2@";
+const SENHA_CORRETA = "psiu2026";
 const WEBHOOK_URL = "https://psiu-webhook.onrender.com";
 
 const MOTIVO_LABEL = {
