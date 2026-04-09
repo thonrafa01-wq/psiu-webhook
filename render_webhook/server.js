@@ -271,6 +271,12 @@ app.post('/webhook', async (req, res) => {
     console.log('[WEBHOOK]', { telefone, msg: mensagemRecebida.substring(0, 100) });
     console.log('[TELEFONE_BRUTO]', JSON.stringify({ phone: req.body.phone, from: req.body.from, telefoneNormalizado: telefone }));
 
+    // ── Ignorar mensagens do número do Rafa (quando ele manda pelo próprio celular, não fromMe) ──
+    if (telefone === RAFA_PHONE || telefone === RAFA_PHONE.replace('55','')) {
+      console.log('[WEBHOOK] Mensagem do Rafa ignorada (não é fromMe, mas é o número dele)');
+      return;
+    }
+
     // ── GATILHO DO RAFA: mensagens enviadas pelo próprio número ──────────────
     // Só processa se vier do número da PSIU (fromMe=true) E for um comando #fechar
     if (fromMe) {
@@ -473,7 +479,7 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
 
   // ── Detecção de massiva ───────────────────────────────────────────────────
   if (intencao === 'suporte') {
-    const trintaMinAtras = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const trintaMinAtras = new Date(Date.now() - 120 * 60 * 1000).toISOString(); // janela de 2 horas
     const todosChamados  = await dbFilter('Atendimento', { motivo: 'suporte' });
     // Contar apenas CLIENTES DIFERENTES (excluindo o próprio) nos últimos 30min
     const clientesRecentes = Array.isArray(todosChamados)
