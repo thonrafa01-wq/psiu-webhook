@@ -259,24 +259,15 @@ app.post('/webhook', async (req, res) => {
     // ── Cliente identificado — processar intenção ─────────────────────────────
     await dbUpdate('ClienteWhatsapp', clienteLocal.id, { ultimo_contato: new Date().toISOString() });
 
-    // ── Horário de funcionamento (só aplica para clientes já identificados) ───
+    // ── Horário de atendimento HUMANO (9h às 20h, seg-sex) ───────────────────
     const horaAtual = new Date();
     const horaBR = new Date(horaAtual.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
     const diaSemana = horaBR.getDay(); // 0=dom, 6=sab
     const hora = horaBR.getHours();
-    const foraDoHorario = diaSemana === 0 || diaSemana === 6 || hora < 8 || hora >= 18;
+    // Atendente humano disponível apenas seg-sex das 9h às 20h
+    const atendenteDisponivel = diaSemana >= 1 && diaSemana <= 5 && hora >= 9 && hora < 20;
 
-    if (foraDoHorario) {
-      const primeiraMsgFora = clienteLocal.estado_conversa !== 'fora_horario';
-      if (primeiraMsgFora) {
-        await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'fora_horario' });
-        const diaLabel = diaSemana === 0 || diaSemana === 6 ? 'hoje (fim de semana)' : 'agora';
-        await enviarMensagem(telefone, `Oi, *${clienteLocal.nome || 'cliente'}*! 😊\n\nNosso horário de atendimento é *seg-sex das 8h às 18h*. ${diaLabel.charAt(0).toUpperCase() + diaLabel.slice(1)} estamos fora desse horário.\n\nAssim que nossa equipe chegar, seu contato será priorizado! Até logo 🙏`);
-      }
-      return res.json({ ok: true, msg: 'fora do horario' });
-    }
-
-    // Limpar estado fora_horario se voltou dentro do horário
+    // Limpar estado fora_horario ao entrar em nova conversa
     if (clienteLocal.estado_conversa === 'fora_horario') {
       await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'menu' });
       clienteLocal.estado_conversa = 'menu';
@@ -443,7 +434,11 @@ app.post('/webhook', async (req, res) => {
     if (mensagemRecebida.trim() === '3' && clienteLocal.estado_conversa !== 'cancelamento_retencao') {
       await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'atendente' });
       await dbCreate('Atendimento', { telefone, nome_cliente: nome, id_cliente_receitanet: idCliente, motivo: 'atendente', mensagem_original: mensagemRecebida, estado_final: 'encaminhado_atendente', data_atendimento: new Date().toISOString(), resolvido: false });
-      await enviarMensagem(telefone, `👤 *${nome}*, vou te transferir para um atendente humano.\n\nNosso horário de atendimento é *seg-sex das 8h às 18h*.\n\nAguarde, alguém entrará em contato em breve! 🙏`);
+      if (atendenteDisponivel) {
+        await enviarMensagem(telefone, `👤 *${nome}*, vou te transferir para um atendente humano.\n\nNosso horário de atendimento é *seg-sex das 9h às 20h* e já estamos disponíveis!\n\nAguarde, alguém entrará em contato em breve! 🙏`);
+      } else {
+        await enviarMensagem(telefone, `👤 *${nome}*, registrei sua solicitação de falar com um atendente!\n\nNosso horário de atendimento humano é *seg-sex das 9h às 20h*.\n\n⏰ Assim que nossa equipe estiver disponível, entraremos em contato com você. Fique tranquilo(a)! 🙏`);
+      }
       return res.json({ ok: true });
     }
 
