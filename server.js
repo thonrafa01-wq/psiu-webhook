@@ -253,7 +253,10 @@ app.post('/webhook', async (req, res) => {
       return res.json({ ok: true });
     }
 
-    // ── Horário de funcionamento (fora do horário: avisa e registra) ─────────────
+    // ── Cliente identificado — processar intenção ─────────────────────────────
+    await dbUpdate('ClienteWhatsapp', clienteLocal.id, { ultimo_contato: new Date().toISOString() });
+
+    // ── Horário de funcionamento (só aplica para clientes já identificados) ───
     const horaAtual = new Date();
     const horaBR = new Date(horaAtual.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
     const diaSemana = horaBR.getDay(); // 0=dom, 6=sab
@@ -263,7 +266,7 @@ app.post('/webhook', async (req, res) => {
     if (foraDoHorario) {
       const primeiraMsgFora = clienteLocal.estado_conversa !== 'fora_horario';
       if (primeiraMsgFora) {
-        await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'fora_horario', ultimo_contato: new Date().toISOString() });
+        await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'fora_horario' });
         const diaLabel = diaSemana === 0 || diaSemana === 6 ? 'hoje (fim de semana)' : 'agora';
         await enviarMensagem(telefone, `Oi, *${clienteLocal.nome || 'cliente'}*! 😊\n\nNosso horário de atendimento é *seg-sex das 8h às 18h*. ${diaLabel.charAt(0).toUpperCase() + diaLabel.slice(1)} estamos fora desse horário.\n\nAssim que nossa equipe chegar, seu contato será priorizado! Até logo 🙏`);
       }
@@ -275,9 +278,6 @@ app.post('/webhook', async (req, res) => {
       await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'menu' });
       clienteLocal.estado_conversa = 'menu';
     }
-
-    // ── Cliente identificado — processar intenção ─────────────────────────────
-    await dbUpdate('ClienteWhatsapp', clienteLocal.id, { ultimo_contato: new Date().toISOString() });
     const intencao = classificarIntencao(mensagemRecebida);
     const idCliente = clienteLocal.id_cliente_receitanet;
     const nome = clienteLocal.nome || 'Cliente';
