@@ -610,6 +610,25 @@ async function handleAtendente(cliente, telefone, mensagem, nome, nomeCompleto, 
   await alertarRafa('👤', 'CLIENTE QUER ATENDENTE', nomeCompleto, telefone, `Solicitou atendimento humano.`);
 }
 
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ENDPOINT /encerrar — chamado pelo painel para encerrar atendimento humano
+// ═════════════════════════════════════════════════════════════════════════════
+app.post('/encerrar', async (req, res) => {
+  try {
+    const { telefone } = req.body;
+    if (!telefone) return res.json({ ok: false, error: 'telefone obrigatório' });
+
+    const tel = telefone.startsWith('55') ? telefone : '55' + telefone;
+    await enviarMensagem(tel, `Atendimento encerrado! Se precisar de mais alguma coisa, é só chamar 😊`);
+    console.log('[ENCERRAR] Mensagem enviada para', tel);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[ENCERRAR] Erro:', err.message);
+    res.json({ ok: false, error: err.message });
+  }
+});
+
 // ═════════════════════════════════════════════════════════════════════════════
 // START
 // ═════════════════════════════════════════════════════════════════════════════

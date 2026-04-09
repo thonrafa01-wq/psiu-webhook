@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Atendimento, ClienteWhatsapp } from "@/api/entities";
 
 const SENHA_CORRETA = "7zvn87C2@";
+const WEBHOOK_URL = "https://psiu-webhook.onrender.com";
 
 const MOTIVO_LABEL = {
   boleto: "💰 Boleto/PIX",
@@ -43,6 +44,9 @@ const ESTADO_LABEL = {
   audio_nao_transcrito: "🎤 Áudio não lido",
 };
 
+// Estados que significam "em atendimento humano"
+const ESTADOS_HUMANO = ["atendente", "atendente_novo_cliente", "aguardando_humano"];
+
 function LoginScreen({ onLogin }) {
   const [senha, setSenha] = useState("");
   const [erro, setErro] = useState(false);
@@ -82,20 +86,13 @@ function LoginScreen({ onLogin }) {
                 placeholder="Digite a senha..."
                 autoFocus
               />
-              <button
-                type="button"
-                onClick={() => setMostrar(!mostrar)}
-                className="absolute right-3 top-2 text-gray-400 text-sm"
-              >
+              <button type="button" onClick={() => setMostrar(!mostrar)} className="absolute right-3 top-2 text-gray-400 text-sm">
                 {mostrar ? "🙈" : "👁️"}
               </button>
             </div>
             {erro && <p className="text-red-500 text-xs mt-1">Senha incorreta. Tente novamente.</p>}
           </div>
-          <button
-            type="submit"
-            className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-2 rounded-lg transition-colors"
-          >
+          <button type="submit" className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-2 rounded-lg transition-colors">
             Entrar
           </button>
         </form>
@@ -109,16 +106,23 @@ export default function Dashboard() {
   const [atendimentos, setAtendimentos] = useState([]);
   const [clientes, setClientes] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [abaAtiva, setAbaAtiva] = useState("dashboard");
+  const [abaAtiva, setAbaAtiva] = useState("ativos");
   const [filtroMotivo, setFiltroMotivo] = useState("todos");
   const [salvandoId, setSalvandoId] = useState(null);
+  const [fechandoTodos, setFechandoTodos] = useState(false);
+  const [toastMsg, setToastMsg] = useState(null);
 
   useEffect(() => {
     if (!autenticado) return;
     carregarDados();
-    const interval = setInterval(carregarDados, 30000);
+    const interval = setInterval(carregarDados, 20000);
     return () => clearInterval(interval);
   }, [autenticado]);
+
+  function toast(msg, tipo = "success") {
+    setToastMsg({ msg, tipo });
+    setTimeout(() => setToastMsg(null), 3000);
+  }
 
   async function carregarDados() {
     try {
@@ -135,9 +139,10 @@ export default function Dashboard() {
 
   if (!autenticado) return <LoginScreen onLogin={() => setAutenticado(true)} />;
 
+  // ── Dados computados ────────────────────────────────────────────────────────
   const hoje = new Date().toISOString().slice(0, 10);
   const atHoje = atendimentos.filter(a => a.data_atendimento?.slice(0, 10) === hoje);
-  const emAtendimentoHumano = clientes.filter(c => c.estado_conversa === "aguardando_humano");
+  const emAtendimentoHumano = clientes.filter(c => ESTADOS_HUMANO.includes(c.estado_conversa));
   const resolvidosAuto = atendimentos.filter(a => a.estado_final === "resolvido_auto" || a.estado_final === "resolvido").length;
   const totalAtendimentos = atendimentos.length;
   const taxaResolucao = totalAtendimentos > 0 ? Math.round((resolvidosAuto / totalAtendimentos) * 100) : 0;
@@ -148,32 +153,60 @@ export default function Dashboard() {
   }, {});
   const motivosOrdenados = Object.entries(motivoCount).sort((a, b) => b[1] - a[1]);
 
-  const clienteCount = atendimentos.reduce((acc, a) => {
-    if (!a.nome_cliente) return acc;
-    if (!acc[a.telefone]) acc[a.telefone] = { nome: a.nome_cliente, telefone: a.telefone, count: 0, motivos: {} };
-    acc[a.telefone].count++;
-    acc[a.telefone].motivos[a.motivo] = (acc[a.telefone].motivos[a.motivo] || 0) + 1;
-    return acc;
-  }, {});
-  const clientesRecorrentes = Object.values(clienteCount).sort((a, b) => b.count - a.count).slice(0, 10);
-
   const atsFiltrados = filtroMotivo === "todos" ? atendimentos : atendimentos.filter(a => a.motivo === filtroMotivo);
 
-  async function assumirAtendimento(cliente) {
+  // ── Ações ───────────────────────────────────────────────────────────────────
+
+  // Encerrar atendimento humano de 1 cliente — bot volta a atender + mensagem de encerramento
+  async function encerrarAtendimento(cliente) {
     setSalvandoId(cliente.id);
     try {
-      await ClienteWhatsapp.update(cliente.id, { estado_conversa: "aguardando_humano" });
+      await ClienteWhatsapp.update(cliente.id, { estado_conversa: "identificado" });
+      // Avisar o cliente via webhook
+      const tel = cliente.telefone;
+      await fetch(`${WEBHOOK_URL}/encerrar`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ telefone: tel })
+      }).catch(() => {}); // Se falhar não trava
       await carregarDados();
+      toast(`✅ Atendimento de ${cliente.nome || cliente.telefone} encerrado`);
+    } catch (e) {
+      toast("❌ Erro ao encerrar atendimento", "error");
     } finally {
       setSalvandoId(null);
     }
   }
 
-  async function liberarAtendimento(cliente) {
+  // Encerrar todos os atendimentos humanos de uma vez
+  async function encerrarTodos() {
+    if (emAtendimentoHumano.length === 0) return;
+    setFechandoTodos(true);
+    try {
+      for (const c of emAtendimentoHumano) {
+        await ClienteWhatsapp.update(c.id, { estado_conversa: "identificado" });
+        await fetch(`${WEBHOOK_URL}/encerrar`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ telefone: c.telefone })
+        }).catch(() => {});
+      }
+      await carregarDados();
+      toast(`✅ ${emAtendimentoHumano.length} atendimento(s) encerrado(s)`);
+    } catch (e) {
+      toast("❌ Erro ao encerrar atendimentos", "error");
+    } finally {
+      setFechandoTodos(false);
+    }
+  }
+
+  // Assumir manualmente (pausa o bot sem enviar mensagem)
+  async function assumirAtendimento(cliente) {
     setSalvandoId(cliente.id);
     try {
-      await ClienteWhatsapp.update(cliente.id, { estado_conversa: "identificado" });
+      await ClienteWhatsapp.update(cliente.id, { estado_conversa: "atendente" });
       await carregarDados();
+      toast(`👨‍💻 Assumido atendimento de ${cliente.nome || cliente.telefone}`);
     } finally {
       setSalvandoId(null);
     }
@@ -189,322 +222,341 @@ export default function Dashboard() {
   );
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 pb-10">
+
+      {/* Toast */}
+      {toastMsg && (
+        <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-xl shadow-lg text-white text-sm font-medium transition-all ${
+          toastMsg.tipo === "error" ? "bg-red-600" : "bg-green-600"
+        }`}>
+          {toastMsg.msg}
+        </div>
+      )}
+
       {/* Header */}
-      <div className="bg-green-600 text-white px-6 py-4 shadow">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
+      <div className="bg-green-600 text-white px-4 py-4 shadow sticky top-0 z-40">
+        <div className="max-w-5xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <span className="text-2xl">📡</span>
             <div>
-              <h1 className="text-xl font-bold">PSIU TELECOM</h1>
-              <p className="text-green-200 text-sm">Central de Atendimento WhatsApp</p>
+              <h1 className="text-lg font-bold leading-tight">PSIU TELECOM</h1>
+              <p className="text-green-200 text-xs">Central de Atendimento</p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <button onClick={carregarDados} className="bg-green-500 hover:bg-green-400 px-3 py-1.5 rounded text-sm flex items-center gap-2">
-              🔄 Atualizar
-            </button>
-            <button
-              onClick={() => { sessionStorage.removeItem("psiu_auth"); setAutenticado(false); }}
-              className="bg-green-700 hover:bg-green-600 px-3 py-1.5 rounded text-sm"
-            >
-              Sair
-            </button>
+          <div className="flex items-center gap-2">
+            {emAtendimentoHumano.length > 0 && (
+              <span className="bg-orange-500 text-white text-xs font-bold px-2 py-1 rounded-full animate-pulse">
+                {emAtendimentoHumano.length} humano
+              </span>
+            )}
+            <button onClick={carregarDados} className="bg-green-500 hover:bg-green-400 p-2 rounded-lg text-sm">🔄</button>
+            <button onClick={() => { sessionStorage.removeItem("psiu_auth"); setAutenticado(false); }} className="bg-green-700 hover:bg-green-600 p-2 rounded-lg text-sm">🚪</button>
           </div>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="max-w-7xl mx-auto px-4 mt-4">
-        <div className="flex gap-1 bg-white rounded-lg p-1 shadow-sm w-fit flex-wrap">
+      <div className="max-w-5xl mx-auto px-4 mt-4">
+        <div className="flex gap-1 bg-white rounded-xl p-1 shadow-sm overflow-x-auto">
           {[
+            { id: "ativos", label: "👨‍💻 Em Atendimento" },
             { id: "dashboard", label: "📊 Dashboard" },
             { id: "historico", label: "📋 Histórico" },
             { id: "clientes", label: "👥 Clientes" },
-            { id: "controle", label: "🎛️ Controle Manual" },
           ].map(tab => (
             <button
               key={tab.id}
               onClick={() => setAbaAtiva(tab.id)}
-              className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+              className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors flex-shrink-0 ${
                 abaAtiva === tab.id ? "bg-green-600 text-white" : "text-gray-600 hover:bg-gray-100"
               }`}
             >
               {tab.label}
+              {tab.id === "ativos" && emAtendimentoHumano.length > 0 && (
+                <span className="ml-1.5 bg-orange-500 text-white text-xs px-1.5 py-0.5 rounded-full">
+                  {emAtendimentoHumano.length}
+                </span>
+              )}
             </button>
           ))}
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 py-4">
+      <div className="max-w-5xl mx-auto px-4 py-4">
 
-        {/* Dashboard */}
-        {abaAtiva === "dashboard" && (
-          <div className="space-y-5">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <StatCard icon="📨" label="Hoje" value={atHoje.length} color="blue" />
-              <StatCard icon="📦" label="Total Atendimentos" value={totalAtendimentos} color="gray" />
-              <StatCard icon="✅" label="Taxa de Resolução" value={`${taxaResolucao}%`} color="green" />
-              <StatCard icon="👨‍💻" label="Aguardando Humano" value={emAtendimentoHumano.length} color={emAtendimentoHumano.length > 0 ? "orange" : "green"} />
-            </div>
+        {/* ═══════════════════════════════════════════════════════════════════ */}
+        {/* ABA: EM ATENDIMENTO HUMANO                                        */}
+        {/* ═══════════════════════════════════════════════════════════════════ */}
+        {abaAtiva === "ativos" && (
+          <div className="space-y-4">
 
-            <div className="grid md:grid-cols-2 gap-4">
-              <div className="bg-white rounded-xl shadow-sm p-5">
-                <h2 className="font-semibold text-gray-700 mb-4">🎯 Motivos mais frequentes</h2>
-                {motivosOrdenados.length === 0 ? (
-                  <p className="text-gray-400 text-sm">Nenhum atendimento ainda</p>
-                ) : (
-                  <div className="space-y-3">
-                    {motivosOrdenados.map(([motivo, count]) => {
-                      const pct = Math.round((count / totalAtendimentos) * 100);
+            {/* Banner quando não tem ninguém */}
+            {emAtendimentoHumano.length === 0 ? (
+              <div className="bg-white rounded-2xl shadow-sm p-10 text-center">
+                <div className="text-5xl mb-3">🤖</div>
+                <h2 className="text-lg font-semibold text-gray-700">Bot no controle!</h2>
+                <p className="text-gray-400 text-sm mt-1">Nenhum cliente em atendimento humano agora.</p>
+              </div>
+            ) : (
+              <>
+                {/* Botão "Encerrar todos" */}
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-gray-600 font-medium">
+                    {emAtendimentoHumano.length} cliente(s) aguardando — bot pausado para eles
+                  </p>
+                  <button
+                    onClick={encerrarTodos}
+                    disabled={fechandoTodos}
+                    className="bg-green-600 hover:bg-green-700 text-white text-sm px-4 py-2 rounded-lg font-medium disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {fechandoTodos ? (
+                      <><span className="animate-spin">⏳</span> Encerrando...</>
+                    ) : (
+                      <>🤖 Devolver todos ao bot</>
+                    )}
+                  </button>
+                </div>
+
+                {/* Cards dos clientes em atendimento */}
+                <div className="grid gap-3">
+                  {emAtendimentoHumano
+                    .sort((a, b) => new Date(b.ultimo_contato || 0) - new Date(a.ultimo_contato || 0))
+                    .map(c => {
+                      const tempoEspera = c.ultimo_contato
+                        ? Math.round((Date.now() - new Date(c.ultimo_contato)) / 60000)
+                        : null;
                       return (
-                        <div key={motivo}>
-                          <div className="flex justify-between text-sm mb-1">
-                            <span className="font-medium">{MOTIVO_LABEL[motivo] || motivo}</span>
-                            <span className="text-gray-500">{count} ({pct}%)</span>
-                          </div>
-                          <div className="bg-gray-100 rounded-full h-2">
-                            <div className="bg-green-500 h-2 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                        <div key={c.id} className="bg-white rounded-2xl shadow-sm border-l-4 border-orange-400 p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-semibold text-gray-800">{c.nome || "Sem nome"}</span>
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                  c.estado_conversa === "atendente_novo_cliente"
+                                    ? "bg-blue-100 text-blue-700"
+                                    : "bg-orange-100 text-orange-700"
+                                }`}>
+                                  {c.estado_conversa === "atendente_novo_cliente" ? "🆕 Novo Cliente" : "👨‍💻 Atendimento"}
+                                </span>
+                              </div>
+                              <p className="text-sm text-gray-500 mt-0.5">📞 {c.telefone.replace(/^55/, '')}</p>
+                              {tempoEspera !== null && (
+                                <p className={`text-xs mt-1 ${tempoEspera > 30 ? "text-red-500 font-medium" : "text-gray-400"}`}>
+                                  ⏱️ {tempoEspera < 1 ? "agora mesmo" : `há ${tempoEspera} min`}
+                                  {tempoEspera > 30 && " — aguardando há muito tempo!"}
+                                </p>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => encerrarAtendimento(c)}
+                              disabled={salvandoId === c.id}
+                              className="bg-green-600 hover:bg-green-700 text-white text-sm px-4 py-2 rounded-xl font-medium disabled:opacity-50 whitespace-nowrap flex-shrink-0"
+                            >
+                              {salvandoId === c.id ? "⏳" : "✅ Encerrar"}
+                            </button>
                           </div>
                         </div>
                       );
                     })}
-                  </div>
-                )}
-              </div>
+                </div>
+              </>
+            )}
 
-              <div className="bg-white rounded-xl shadow-sm p-5">
-                <h2 className="font-semibold text-gray-700 mb-4">🔁 Clientes que mais contatam</h2>
-                {clientesRecorrentes.length === 0 ? (
-                  <p className="text-gray-400 text-sm">Nenhum dado ainda</p>
-                ) : (
-                  <div className="space-y-2">
-                    {clientesRecorrentes.map((c, i) => (
-                      <div key={c.telefone} className="flex items-center justify-between py-2 border-b last:border-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-gray-400 w-4">{i + 1}.</span>
-                          <div>
-                            <p className="text-sm font-medium text-gray-800">{c.nome || c.telefone}</p>
-                            <p className="text-xs text-gray-400">{c.telefone}</p>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <span className="bg-green-100 text-green-800 text-xs font-semibold px-2 py-1 rounded-full">{c.count}x</span>
-                          <div className="flex gap-1 mt-1 justify-end flex-wrap">
-                            {Object.entries(c.motivos).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([m]) => (
-                              <span key={m} className={`text-xs px-1.5 py-0.5 rounded ${MOTIVO_COLOR[m]}`}>
-                                {MOTIVO_LABEL[m]?.split(" ")[0]}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
+            {/* Seção: assumir atendimento manualmente */}
+            <div className="bg-white rounded-2xl shadow-sm mt-6">
+              <div className="p-4 border-b">
+                <h3 className="font-semibold text-gray-700">🤖 Clientes no bot</h3>
+                <p className="text-xs text-gray-400 mt-0.5">Toque em "Assumir" para pausar o bot e atender manualmente</p>
+              </div>
+              <div className="divide-y max-h-80 overflow-y-auto">
+                {clientes.filter(c => !ESTADOS_HUMANO.includes(c.estado_conversa) && c.identificado).length === 0 ? (
+                  <p className="p-4 text-gray-400 text-sm">Nenhum cliente ativo no bot</p>
+                ) : clientes
+                  .filter(c => !ESTADOS_HUMANO.includes(c.estado_conversa) && c.identificado)
+                  .sort((a, b) => new Date(b.ultimo_contato || 0) - new Date(a.ultimo_contato || 0))
+                  .map(c => (
+                    <div key={c.id} className="p-3 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-medium text-sm text-gray-800 truncate">{c.nome || "Sem nome"}</p>
+                        <p className="text-xs text-gray-400">{c.telefone.replace(/^55/, '')}</p>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {emAtendimentoHumano.length > 0 && (
-              <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
-                <h3 className="font-semibold text-orange-800 mb-2">⚠️ Aguardando atendimento humano ({emAtendimentoHumano.length})</h3>
-                <div className="flex flex-wrap gap-2">
-                  {emAtendimentoHumano.map(c => (
-                    <div key={c.id} className="bg-white border border-orange-200 rounded-lg px-3 py-2 text-sm flex items-center gap-2">
-                      <span className="font-medium">{c.nome || c.telefone}</span>
-                      <button onClick={() => setAbaAtiva("controle")} className="text-orange-600 hover:underline text-xs">gerenciar →</button>
+                      <button
+                        onClick={() => assumirAtendimento(c)}
+                        disabled={salvandoId === c.id}
+                        className="bg-orange-500 hover:bg-orange-600 text-white text-xs px-3 py-1.5 rounded-lg disabled:opacity-50 whitespace-nowrap flex-shrink-0"
+                      >
+                        {salvandoId === c.id ? "⏳" : "👨‍💻 Assumir"}
+                      </button>
                     </div>
                   ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════════════ */}
+        {/* ABA: DASHBOARD                                                    */}
+        {/* ═══════════════════════════════════════════════════════════════════ */}
+        {abaAtiva === "dashboard" && (
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <StatCard icon="📨" label="Hoje" value={atHoje.length} color="blue" />
+              <StatCard icon="📦" label="Total" value={totalAtendimentos} color="gray" />
+              <StatCard icon="✅" label="Resolvidos pelo Bot" value={`${taxaResolucao}%`} color="green" />
+              <StatCard icon="👨‍💻" label="Em Atendimento" value={emAtendimentoHumano.length} color={emAtendimentoHumano.length > 0 ? "orange" : "green"} />
+            </div>
+
+            <div className="bg-white rounded-xl shadow-sm p-5">
+              <h2 className="font-semibold text-gray-700 mb-4">🎯 Motivos mais frequentes</h2>
+              {motivosOrdenados.length === 0 ? (
+                <p className="text-gray-400 text-sm">Nenhum atendimento ainda</p>
+              ) : (
+                <div className="space-y-3">
+                  {motivosOrdenados.map(([motivo, count]) => {
+                    const pct = Math.round((count / totalAtendimentos) * 100);
+                    return (
+                      <div key={motivo}>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span>{MOTIVO_LABEL[motivo] || motivo}</span>
+                          <span className="text-gray-500">{count} ({pct}%)</span>
+                        </div>
+                        <div className="bg-gray-100 rounded-full h-2">
+                          <div className="bg-green-500 h-2 rounded-full" style={{ width: `${pct}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Alertas do dia */}
+            {atHoje.filter(a => a.motivo === "suporte" || a.motivo === "cancelamento").length > 0 && (
+              <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+                <h3 className="font-semibold text-red-700 mb-2">⚠️ Atenção hoje</h3>
+                <div className="space-y-1">
+                  {atHoje.filter(a => a.motivo === "cancelamento").length > 0 && (
+                    <p className="text-sm text-red-600">❌ {atHoje.filter(a => a.motivo === "cancelamento").length} pedido(s) de cancelamento</p>
+                  )}
+                  {atHoje.filter(a => a.estado_final === "massiva").length > 0 && (
+                    <p className="text-sm text-red-600">🚨 Ocorrência de massiva detectada</p>
+                  )}
                 </div>
               </div>
             )}
           </div>
         )}
 
-        {/* Histórico */}
+        {/* ═══════════════════════════════════════════════════════════════════ */}
+        {/* ABA: HISTÓRICO                                                    */}
+        {/* ═══════════════════════════════════════════════════════════════════ */}
         {abaAtiva === "historico" && (
-          <div className="bg-white rounded-xl shadow-sm">
-            <div className="p-4 border-b flex items-center gap-3 flex-wrap">
-              <span className="font-semibold text-gray-700">Filtrar:</span>
-              {["todos", "boleto", "suporte", "cancelamento", "menu", "outro"].map(m => (
+          <div className="space-y-3">
+            <div className="flex gap-2 flex-wrap">
+              {["todos", "boleto", "suporte", "cancelamento", "outro"].map(m => (
                 <button
                   key={m}
                   onClick={() => setFiltroMotivo(m)}
-                  className={`px-3 py-1 rounded-full text-sm ${filtroMotivo === m ? "bg-green-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                    filtroMotivo === m ? "bg-green-600 text-white" : "bg-white text-gray-600 shadow-sm hover:bg-gray-50"
+                  }`}
                 >
                   {m === "todos" ? "Todos" : MOTIVO_LABEL[m]}
                 </button>
               ))}
             </div>
+
+            <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 text-gray-600">
+                    <tr>
+                      <th className="text-left px-4 py-3">Cliente</th>
+                      <th className="text-left px-4 py-3">Motivo</th>
+                      <th className="text-left px-4 py-3">Status</th>
+                      <th className="text-left px-4 py-3">Data</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {atsFiltrados.slice(0, 100).map(a => (
+                      <tr key={a.id} className="hover:bg-gray-50">
+                        <td className="px-4 py-3">
+                          <p className="font-medium">{a.nome_cliente || "—"}</p>
+                          <p className="text-xs text-gray-400">{a.telefone}</p>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`text-xs px-2 py-1 rounded-full ${MOTIVO_COLOR[a.motivo] || "bg-gray-100 text-gray-600"}`}>
+                            {MOTIVO_LABEL[a.motivo] || a.motivo}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`text-xs px-2 py-1 rounded-full ${ESTADO_COLOR[a.estado_final] || "bg-gray-100 text-gray-600"}`}>
+                            {ESTADO_LABEL[a.estado_final] || a.estado_final}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-500">
+                          {a.data_atendimento ? new Date(a.data_atendimento).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {atsFiltrados.length === 0 && (
+                  <p className="text-center text-gray-400 py-8 text-sm">Nenhum atendimento encontrado</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════════════ */}
+        {/* ABA: CLIENTES                                                     */}
+        {/* ═══════════════════════════════════════════════════════════════════ */}
+        {abaAtiva === "clientes" && (
+          <div className="bg-white rounded-xl shadow-sm overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-gray-50 text-gray-500 text-left">
-                    <th className="px-4 py-3">Data/Hora</th>
-                    <th className="px-4 py-3">Cliente</th>
-                    <th className="px-4 py-3">Telefone</th>
-                    <th className="px-4 py-3">Motivo</th>
-                    <th className="px-4 py-3">Mensagem</th>
-                    <th className="px-4 py-3">Status</th>
+                <thead className="bg-gray-50 text-gray-600">
+                  <tr>
+                    <th className="text-left px-4 py-3">Cliente</th>
+                    <th className="text-left px-4 py-3">Status</th>
+                    <th className="text-left px-4 py-3">Último contato</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {atsFiltrados.slice(0, 100).map(a => (
-                    <tr key={a.id} className="border-t hover:bg-gray-50">
-                      <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
-                        {a.data_atendimento ? new Date(a.data_atendimento).toLocaleString("pt-BR") : "-"}
-                      </td>
-                      <td className="px-4 py-3 font-medium">{a.nome_cliente || "-"}</td>
-                      <td className="px-4 py-3 text-gray-500">{a.telefone}</td>
-                      <td className="px-4 py-3">
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${MOTIVO_COLOR[a.motivo]}`}>
-                          {MOTIVO_LABEL[a.motivo] || a.motivo}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-gray-500 max-w-xs truncate">{a.mensagem_original}</td>
-                      <td className="px-4 py-3">
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${ESTADO_COLOR[a.estado_final]}`}>
-                          {ESTADO_LABEL[a.estado_final] || a.estado_final}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                  {atsFiltrados.length === 0 && (
-                    <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">Nenhum atendimento encontrado</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* Clientes */}
-        {abaAtiva === "clientes" && (
-          <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-            <div className="p-4 border-b">
-              <h2 className="font-semibold text-gray-700">👥 Todos os clientes ({clientes.length})</h2>
-            </div>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50 text-gray-500 text-left">
-                  <th className="px-4 py-3">Nome</th>
-                  <th className="px-4 py-3">Telefone</th>
-                  <th className="px-4 py-3">CPF/CNPJ</th>
-                  <th className="px-4 py-3">Identificado</th>
-                  <th className="px-4 py-3">Estado</th>
-                  <th className="px-4 py-3">Último Contato</th>
-                  <th className="px-4 py-3">Atendimentos</th>
-                </tr>
-              </thead>
-              <tbody>
-                {clientes.map(c => {
-                  const totalC = atendimentos.filter(a => a.telefone === c.telefone).length;
-                  return (
-                    <tr key={c.id} className="border-t hover:bg-gray-50">
-                      <td className="px-4 py-3 font-medium">{c.nome || "-"}</td>
-                      <td className="px-4 py-3 text-gray-500">{c.telefone}</td>
-                      <td className="px-4 py-3 text-gray-500">{c.cpf_cnpj || "-"}</td>
-                      <td className="px-4 py-3">
-                        <span className={`px-2 py-1 rounded-full text-xs ${c.identificado ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
-                          {c.identificado ? "✅ Sim" : "❓ Não"}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          c.estado_conversa === "aguardando_humano" ? "bg-orange-100 text-orange-700" :
-                          c.estado_conversa === "identificado" ? "bg-green-100 text-green-700" :
-                          "bg-blue-100 text-blue-700"
-                        }`}>
-                          {c.estado_conversa === "aguardando_humano" ? "👨‍💻 Humano" :
-                           c.estado_conversa === "identificado" ? "🤖 Bot" :
-                           c.estado_conversa || "-"}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
-                        {c.ultimo_contato ? new Date(c.ultimo_contato).toLocaleString("pt-BR") : "-"}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <span className="bg-gray-100 text-gray-700 text-xs font-semibold px-2 py-1 rounded-full">{totalC}</span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Controle Manual */}
-        {abaAtiva === "controle" && (
-          <div className="space-y-4">
-            <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 text-sm text-yellow-800">
-              <strong>⚡ Controle Manual:</strong> Assuma o atendimento de qualquer cliente (o bot para de responder) ou devolva ao bot quando quiser. Use quando o agente não estiver funcionando corretamente.
-            </div>
-
-            <div className="grid md:grid-cols-2 gap-4">
-              <div className="bg-white rounded-xl shadow-sm">
-                <div className="p-4 border-b bg-orange-50 rounded-t-xl">
-                  <h3 className="font-semibold text-orange-800">👨‍💻 Em atendimento humano ({emAtendimentoHumano.length})</h3>
-                  <p className="text-xs text-orange-600 mt-1">Bot pausado para esses clientes</p>
-                </div>
-                <div className="divide-y">
-                  {emAtendimentoHumano.length === 0 ? (
-                    <p className="p-4 text-gray-400 text-sm">Nenhum cliente aguardando humano</p>
-                  ) : emAtendimentoHumano.map(c => (
-                    <div key={c.id} className="p-4 flex items-center justify-between">
-                      <div>
-                        <p className="font-medium text-sm">{c.nome || "Sem nome"}</p>
-                        <p className="text-xs text-gray-400">{c.telefone}</p>
-                        {c.ultimo_contato && (
-                          <p className="text-xs text-gray-400">{new Date(c.ultimo_contato).toLocaleString("pt-BR")}</p>
-                        )}
-                      </div>
-                      <button
-                        onClick={() => liberarAtendimento(c)}
-                        disabled={salvandoId === c.id}
-                        className="bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-2 rounded-lg disabled:opacity-50"
-                      >
-                        {salvandoId === c.id ? "..." : "🤖 Devolver ao Bot"}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="bg-white rounded-xl shadow-sm">
-                <div className="p-4 border-b bg-blue-50 rounded-t-xl">
-                  <h3 className="font-semibold text-blue-800">🤖 No bot automático</h3>
-                  <p className="text-xs text-blue-600 mt-1">Clique para assumir manualmente</p>
-                </div>
-                <div className="divide-y max-h-96 overflow-y-auto">
-                  {clientes.filter(c => c.estado_conversa !== "aguardando_humano" && c.identificado).length === 0 ? (
-                    <p className="p-4 text-gray-400 text-sm">Nenhum cliente ativo no bot</p>
-                  ) : clientes
-                    .filter(c => c.estado_conversa !== "aguardando_humano" && c.identificado)
+                <tbody className="divide-y">
+                  {clientes
                     .sort((a, b) => new Date(b.ultimo_contato || 0) - new Date(a.ultimo_contato || 0))
                     .map(c => (
-                      <div key={c.id} className="p-4 flex items-center justify-between">
-                        <div>
-                          <p className="font-medium text-sm">{c.nome || "Sem nome"}</p>
-                          <p className="text-xs text-gray-400">{c.telefone}</p>
-                          {c.ultimo_contato && (
-                            <p className="text-xs text-gray-400">{new Date(c.ultimo_contato).toLocaleString("pt-BR")}</p>
-                          )}
-                        </div>
-                        <button
-                          onClick={() => assumirAtendimento(c)}
-                          disabled={salvandoId === c.id}
-                          className="bg-orange-500 hover:bg-orange-600 text-white text-xs px-3 py-2 rounded-lg disabled:opacity-50"
-                        >
-                          {salvandoId === c.id ? "..." : "👨‍💻 Assumir"}
-                        </button>
-                      </div>
+                      <tr key={c.id} className="hover:bg-gray-50">
+                        <td className="px-4 py-3">
+                          <p className="font-medium">{c.nome || "Sem nome"}</p>
+                          <p className="text-xs text-gray-400">{c.telefone.replace(/^55/, "")}</p>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`text-xs px-2 py-1 rounded-full ${
+                            ESTADOS_HUMANO.includes(c.estado_conversa)
+                              ? "bg-orange-100 text-orange-700"
+                              : c.identificado
+                              ? "bg-green-100 text-green-700"
+                              : "bg-gray-100 text-gray-500"
+                          }`}>
+                            {ESTADOS_HUMANO.includes(c.estado_conversa) ? "👨‍💻 Humano" : c.identificado ? "🤖 Bot" : "❓ Novo"}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-500">
+                          {c.ultimo_contato ? new Date(c.ultimo_contato).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
+                        </td>
+                      </tr>
                     ))}
-                </div>
-              </div>
+                </tbody>
+              </table>
+              {clientes.length === 0 && (
+                <p className="text-center text-gray-400 py-8 text-sm">Nenhum cliente ainda</p>
+              )}
             </div>
           </div>
         )}
+
       </div>
     </div>
   );
@@ -521,7 +573,7 @@ function StatCard({ icon, label, value, color }) {
     <div className={`rounded-xl p-4 shadow-sm ${colors[color]}`}>
       <div className="text-2xl mb-1">{icon}</div>
       <div className="text-2xl font-bold">{value}</div>
-      <div className="text-sm opacity-75">{label}</div>
+      <div className="text-xs opacity-75">{label}</div>
     </div>
   );
 }
