@@ -162,13 +162,18 @@ function classificarIntencaoFallback(msg) {
 // ═════════════════════════════════════════════════════════════════════════════
 async function enviarMensagem(telefone, mensagem) {
   const numero = telefone.startsWith('55') ? telefone : '55' + telefone;
+
+  // Delay humanizado: ~40 chars/segundo de "digitação", entre 2 e 12 segundos
+  const chars = mensagem.replace(/\s+/g, '').length;
+  const delaySegundos = Math.min(12, Math.max(2, Math.round(chars / 40)));
+
   const res = await fetch(`${ZAPI_BASE}/send-text`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'client-token': ZAPI_CLIENT_TOKEN },
-    body: JSON.stringify({ phone: numero, message: mensagem })
+    body: JSON.stringify({ phone: numero, message: mensagem, delay: delaySegundos })
   });
   const data = await res.json();
-  console.log('[Z-API] envio:', JSON.stringify(data).substring(0, 150));
+  console.log('[Z-API] envio (delay:', delaySegundos, 's):', JSON.stringify(data).substring(0, 150));
   return data;
 }
 
