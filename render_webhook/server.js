@@ -294,7 +294,7 @@ async function handleNaoCliente(cliente, telefone, mensagem) {
   }
 
   // Para qualquer outra mensagem — orientar a entrar em contato
-  await enviarMensagem(telefone, `Olá! 👋 Seja bem-vindo(a) à *PSIU TELECOM*!\n\nNão encontrei seu número em nossa base de clientes. Se quiser contratar nossos serviços ou falar com nossa equipe, é só dizer! 😊\n\n📞 *(19) 3167-2161*`);
+  await enviarMensagem(telefone, `Olá! 👋 Seja bem-vindo(a) à *PSIU TELECOM*!\n\nNão encontrei seu número em nossa base de clientes. Se quiser contratar nossos serviços ou falar com nossa equipe, é só dizer! 😊`);
 }
 
 // ── Fluxo: cliente identificado ───────────────────────────────────────────────
@@ -366,7 +366,7 @@ async function handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente) {
 
   if (!dados.success) {
     await registrarAtendimento(telefone, nomeCompleto, idCliente, 'boleto', '', 'erro_api', false);
-    await enviarMensagem(telefone, `*${nome}*, não consegui carregar sua fatura agora. Tenta em alguns minutos ou fala com nosso time: *(19) 3167-2161* 😊`);
+    await enviarMensagem(telefone, `*${nome}*, não consegui carregar sua fatura agora. Tenta em alguns minutos ou fala com nossa equipe por aqui mesmo 😊`);
     return;
   }
 
