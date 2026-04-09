@@ -10,7 +10,7 @@ const RECEITANET_BASE = 'https://sistema.receitanet.net/api/novo/chatbot';
 const BASE44_APP_ID = '69d55fd1a341508858f11d46';
 
 // Token dinâmico — atualizado via endpoint /update-token
-let BASE44_SERVICE_TOKEN_DYNAMIC = BASE44_SERVICE_TOKEN_DYNAMIC;
+let BASE44_SERVICE_TOKEN_DYNAMIC = process.env.BASE44_SERVICE_TOKEN || '';
 const REFRESH_SECRET = process.env.REFRESH_SECRET || 'psiu2024refresh';
 
 const ZAPI_INSTANCE = '3F15DC3330DCC11BF2A3BE4FDF68D33E';
