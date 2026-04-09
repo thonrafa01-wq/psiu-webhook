@@ -240,7 +240,14 @@ app.post('/webhook', async (req, res) => {
     // ═══════════════════════════════════════════════════════════════════════════
     // BLOCO 1 — CLIENTE NÃO IDENTIFICADO
     // ═══════════════════════════════════════════════════════════════════════════
-    if (!clienteLocal || !clienteLocal.identificado) {
+    // Proteção: se cliente tem id_cliente_receitanet OU identificado=true, nunca resetar para fluxo de identificação
+    if (clienteLocal && clienteLocal.id_cliente_receitanet && clienteLocal.estado_conversa === 'aguardando_eh_cliente') {
+      await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'identificado', identificado: true });
+      clienteLocal.estado_conversa = 'identificado';
+      clienteLocal.identificado = true;
+    }
+
+    if (!clienteLocal || (!clienteLocal.identificado && !(clienteLocal.id_cliente_receitanet))) {
 
       // Tentar identificar pelo telefone automaticamente
       const resultadoBusca = await buscarClientePorTelefone(telefone);
