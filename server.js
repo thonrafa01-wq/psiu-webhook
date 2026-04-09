@@ -240,7 +240,7 @@ app.post('/webhook', async (req, res) => {
     // ═══════════════════════════════════════════════════════════════════════════
     // BLOCO 1 — CLIENTE NÃO IDENTIFICADO
     // ═══════════════════════════════════════════════════════════════════════════
-    if (!clienteLocal || !clienteLocal.identificado) {
+    if (!clienteLocal || (!clienteLocal.identificado && !(clienteLocal.id_cliente_receitanet))) {
 
       // Tentar identificar pelo telefone automaticamente
       const resultadoBusca = await buscarClientePorTelefone(telefone);
