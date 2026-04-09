@@ -253,6 +253,29 @@ app.post('/webhook', async (req, res) => {
       return res.json({ ok: true });
     }
 
+    // ── Horário de funcionamento (fora do horário: avisa e registra) ─────────────
+    const horaAtual = new Date();
+    const horaBR = new Date(horaAtual.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+    const diaSemana = horaBR.getDay(); // 0=dom, 6=sab
+    const hora = horaBR.getHours();
+    const foraDoHorario = diaSemana === 0 || diaSemana === 6 || hora < 8 || hora >= 18;
+
+    if (foraDoHorario) {
+      const primeiraMsgFora = clienteLocal.estado_conversa !== 'fora_horario';
+      if (primeiraMsgFora) {
+        await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'fora_horario', ultimo_contato: new Date().toISOString() });
+        const diaLabel = diaSemana === 0 || diaSemana === 6 ? 'hoje (fim de semana)' : 'agora';
+        await enviarMensagem(telefone, `Oi, *${clienteLocal.nome || 'cliente'}*! 😊\n\nNosso horário de atendimento é *seg-sex das 8h às 18h*. ${diaLabel.charAt(0).toUpperCase() + diaLabel.slice(1)} estamos fora desse horário.\n\nAssim que nossa equipe chegar, seu contato será priorizado! Até logo 🙏`);
+      }
+      return res.json({ ok: true, msg: 'fora do horario' });
+    }
+
+    // Limpar estado fora_horario se voltou dentro do horário
+    if (clienteLocal.estado_conversa === 'fora_horario') {
+      await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'menu' });
+      clienteLocal.estado_conversa = 'menu';
+    }
+
     // ── Cliente identificado — processar intenção ─────────────────────────────
     await dbUpdate('ClienteWhatsapp', clienteLocal.id, { ultimo_contato: new Date().toISOString() });
     const intencao = classificarIntencao(mensagemRecebida);
@@ -388,9 +411,35 @@ app.post('/webhook', async (req, res) => {
       return res.json({ ok: true });
     }
 
-    if (mensagemRecebida.trim() === '3' || intencao === 'cancelamento') {
+    if (intencao === 'cancelamento' && clienteLocal.estado_conversa !== 'cancelamento_retencao' && clienteLocal.estado_conversa !== 'atendente') {
+      await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'cancelamento_retencao' });
+      await dbCreate('Atendimento', { telefone, nome_cliente: nome, id_cliente_receitanet: idCliente, motivo: 'cancelamento', mensagem_original: mensagemRecebida, estado_final: 'em_andamento', data_atendimento: new Date().toISOString(), resolvido: false });
+      await enviarMensagem(telefone, `Oi, *${nome}*! 😔 Ficamos tristes em saber que você quer cancelar.\n\nAntes de tomar essa decisão, posso verificar se temos alguma condição especial pra você continuar com a gente. Às vezes dá pra resolver com um ajuste no plano ou prazo!\n\n👉 Qual o motivo do cancelamento?\n\n1️⃣ Valor (tá caro)\n2️⃣ Problemas técnicos\n3️⃣ Mudança de endereço\n4️⃣ Outro motivo`);
+      const horaCanc = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+      await enviarMensagem('5519999619605', \`⚠️ *SOLICITAÇÃO DE CANCELAMENTO*\n\n⏰ \${horaCanc}\n👤 Cliente: *\${nome}*\n📞 Fone: \${telefone.replace('55','')}\n\nO bot está tentando reter. Acompanhe!\`);
+      return res.json({ ok: true });
+    }
+
+    if (clienteLocal.estado_conversa === 'cancelamento_retencao') {
+      const motivo = mensagemRecebida.trim();
       await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'atendente' });
-      await dbCreate('Atendimento', { telefone, nome_cliente: nome, id_cliente_receitanet: idCliente, motivo: intencao === 'cancelamento' ? 'cancelamento' : 'atendente', mensagem_original: mensagemRecebida, estado_final: 'encaminhado_atendente', data_atendimento: new Date().toISOString(), resolvido: false });
+      let msgRetencao = '';
+      if (motivo === '1') {
+        msgRetencao = `Entendemos, *${nome}*! 💙 Temos algumas opções que podem ajudar:\n\n🎁 *Carência especial* — podemos pausar sua conta por até 30 dias\n💳 *Renegociação* — se tiver débito, podemos parcelar\n📦 *Ajuste de plano* — planos mais acessíveis disponíveis\n\nVou passar seu contato pra um atendente que pode te apresentar essas opções agora! Aguarde 😊`;
+      } else if (motivo === '2') {
+        msgRetencao = `*${nome}*, se o motivo é técnico a gente quer resolver! 🔧\n\nAbri um chamado prioritário pra nossa equipe técnica entrar em contato com você hoje. Não precisa cancelar por isso!\n\nAguarde, um atendente vai te chamar em breve 😊`;
+      } else if (motivo === '3') {
+        msgRetencao = `Entendemos, *${nome}*! Se foi mudança de endereço, dependendo da região conseguimos levar a PSIU até você.\n\nVou verificar se temos cobertura no novo endereço. Um atendente vai te contatar para confirmar! 😊`;
+      } else {
+        msgRetencao = `Entendido, *${nome}*! Vou encaminhar para um atendente que pode conversar melhor sobre a sua situação e ver o que podemos fazer por você. \n\nAguarde, alguém entrará em contato em breve! 🙏`;
+      }
+      await enviarMensagem(telefone, msgRetencao);
+      return res.json({ ok: true });
+    }
+
+    if (mensagemRecebida.trim() === '3' && clienteLocal.estado_conversa !== 'cancelamento_retencao') {
+      await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'atendente' });
+      await dbCreate('Atendimento', { telefone, nome_cliente: nome, id_cliente_receitanet: idCliente, motivo: 'atendente', mensagem_original: mensagemRecebida, estado_final: 'encaminhado_atendente', data_atendimento: new Date().toISOString(), resolvido: false });
       await enviarMensagem(telefone, `👤 *${nome}*, vou te transferir para um atendente humano.\n\nNosso horário de atendimento é *seg-sex das 8h às 18h*.\n\nAguarde, alguém entrará em contato em breve! 🙏`);
       return res.json({ ok: true });
     }
