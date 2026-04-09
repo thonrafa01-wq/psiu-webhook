@@ -306,16 +306,18 @@ app.post('/webhook', async (req, res) => {
             return res.json({ ok: true });
           }
         } else {
-          // Primeiro contato — perguntar se já é cliente
-          let registro = clienteLocal;
-          if (!registro) {
-            registro = await dbCreate('ClienteWhatsapp', {
+          // Primeiro contato (clienteLocal não existe) ou estado inválido
+          if (!clienteLocal) {
+            // Realmente primeiro contato — criar registro e perguntar
+            await dbCreate('ClienteWhatsapp', {
               telefone, identificado: false, ultimo_contato: new Date().toISOString(), estado_conversa: 'aguardando_eh_cliente'
             });
+            await enviarMensagem(telefone, `Olá! 👋 Bem-vindo(a) à *PSIU TELECOM*!\n\nVocê já é nosso cliente?`);
           } else {
+            // Cliente existe mas estado é desconhecido — resetar para aguardar resposta
             await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'aguardando_eh_cliente', ultimo_contato: new Date().toISOString() });
+            await enviarMensagem(telefone, `Olá! 👋 Bem-vindo(a) à *PSIU TELECOM*!\n\nVocê já é nosso cliente?`);
           }
-          await enviarMensagem(telefone, `Olá! 👋 Bem-vindo(a) à *PSIU TELECOM*!\n\nVocê já é nosso cliente?`);
           return res.json({ ok: true });
         }
       }
