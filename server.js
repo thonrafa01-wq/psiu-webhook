@@ -349,25 +349,33 @@ app.post('/webhook', async (req, res) => {
 
     // ── BOLETO ────────────────────────────────────────────────────────────────
     if (intencao === 'boleto') {
-      const boletos = await buscarBoletos(idCliente, telefone);
       await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'identificado' });
       await dbCreate('Atendimento', { telefone, nome_cliente: nomeCompleto, id_cliente_receitanet: idCliente, motivo: 'boleto', mensagem_original: mensagemRecebida, estado_final: 'resolvido', data_atendimento: new Date().toISOString(), resolvido: true });
 
-      console.log('[BOLETO] Resposta receitanet:', JSON.stringify(boletos).substring(0,300));
-      const semBoleto = !boletos.success && boletos.msg && boletos.msg.toLowerCase().includes('nenhum');
-      if (boletos.success && boletos.boletos && boletos.boletos.length > 0) {
-        let msg = `Aqui estão seus boletos em aberto, *${nome}*:\n\n`;
-        for (const b of boletos.boletos.slice(0, 3)) {
-          msg += `📅 Vencimento: *${b.vencimento}*\n💰 Valor: *R$ ${b.valor}*\n`;
-          if (b.pixCopiaECola) msg += `\n💳 *PIX Copia e Cola:*\n\`\`\`${b.pixCopiaECola}\`\`\`\n`;
-          if (b.url) msg += `\n📄 *Boleto PDF:*\n${b.url}\n`;
+      // Buscar dados atualizados do cliente via API (já inclui faturasEmAberto)
+      const cpfCliente = clienteLocal.cpf_cnpj ? clienteLocal.cpf_cnpj.replace(/\D/g, '') : null;
+      const dadosCliente = cpfCliente
+        ? await buscarClientePorCpf(cpfCliente)
+        : await buscarClientePorTelefone(telefone);
+
+      console.log('[BOLETO] Dados cliente:', JSON.stringify(dadosCliente).substring(0, 400));
+
+      const faturas = dadosCliente?.contratos?.faturasEmAberto;
+      if (dadosCliente.success && faturas && faturas.length > 0) {
+        let msg = `Olá, *${nome}*! Aqui estão suas faturas em aberto:\n\n`;
+        for (const f of faturas.slice(0, 3)) {
+          const dataVenc = f.vencimento ? new Date(f.vencimento + 'T12:00:00').toLocaleDateString('pt-BR') : '—';
+          msg += `📅 *Vencimento:* ${dataVenc}\n💰 *Valor:* R$ ${parseFloat(f.valor).toFixed(2).replace('.', ',')}\n`;
+          if (f.url) msg += `\n🔗 *Link do Boleto:*\n${f.url}\n`;
+          if (f.urlPixCopiaCola) msg += `\n💳 *PIX Copia e Cola:*\n${f.urlPixCopiaCola}\n`;
+          if (f.urlBoletoCopiaCola) msg += `\n🔢 *Linha Digitável:*\n${f.urlBoletoCopiaCola}\n`;
           msg += '\n';
         }
         await enviarMensagem(telefone, msg.trim());
-      } else if (boletos.success || semBoleto) {
-        await enviarMensagem(telefone, `Boa notícia, *${nome}*! Não encontrei nenhuma fatura em aberto na sua conta. Tudo em dia! ✅`);
+      } else if (dadosCliente.success) {
+        await enviarMensagem(telefone, `Boa notícia, *${nome}*! ✅ Não há nenhuma fatura em aberto na sua conta. Tudo em dia!`);
       } else {
-        await enviarMensagem(telefone, `*${nome}*, não consegui carregar seus boletos agora. Tenta de novo em alguns minutos ou fala com nosso time: *(19) 3167-2161* 😊`);
+        await enviarMensagem(telefone, `*${nome}*, não consegui carregar sua fatura agora. Tenta novamente em alguns minutos ou fala com nosso time: *(19) 3167-2161* 😊`);
       }
       return res.json({ ok: true });
     }
