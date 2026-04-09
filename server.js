@@ -289,6 +289,14 @@ app.post('/webhook', async (req, res) => {
         await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'menu' });
         await dbCreate('Atendimento', { telefone, nome_cliente: nome, id_cliente_receitanet: idCliente, motivo: 'suporte', mensagem_original: mensagemRecebida, estado_final: 'massiva', data_atendimento: new Date().toISOString(), resolvido: false });
         await enviarMensagem(telefone, `Oi, *${nome}*! 😔\n\nIdentificamos que estamos passando por uma instabilidade na rede que pode estar afetando sua região. Nossa equipe já foi acionada e está trabalhando na resolução.\n\n⏱️ *Previsão de normalização: até 5 horas* (podendo haver alterações conforme o andamento dos reparos).\n\nAssim que tudo for normalizado, você receberá uma mensagem aqui. Pedimos desculpas pelo transtorno! 🙏`);
+
+        // Avisar o dono somente na primeira detecção (evitar spam)
+        const jaAvisouMassiva = chamadosRecentes.filter(c => c.data_atendimento >= cincoMinAtras && c.estado_final === 'massiva').length;
+        if (jaAvisouMassiva === 0) {
+          const qtd = chamadosRecentes.filter(c => c.data_atendimento >= cincoMinAtras).length + 1;
+          await enviarMensagem('5519999619605', `🚨 *ALERTA MASSIVA - PSIU TELECOM*\n\n${qtd} clientes entraram em contato com problemas de conexão nos últimos 5 minutos.\n\nO sistema já está avisando os clientes sobre o rompimento. Verifique a rede! ⚠️`);
+        }
+
         return res.json({ ok: true });
       }
 
