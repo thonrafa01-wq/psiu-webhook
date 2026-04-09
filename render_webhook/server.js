@@ -136,7 +136,19 @@ function extrairDados(body) {
   if (body.text && typeof body.text === 'object') mensagem = String(body.text.message || '');
   else mensagem = String(body.message || body.content || body.body || '');
   let audioUrl = null;
+  // Z-API pode mandar áudio em body.audio, body.audioUrl, ou como type=AudioMessage
   if (body.audio) audioUrl = body.audio.audioUrl || body.audio.url || null;
+  if (!audioUrl && body.audioUrl) audioUrl = body.audioUrl;
+  if (!audioUrl && body.type === 'AudioMessage' && body.audio) audioUrl = body.audio;
+  // Log completo quando áudio detectado
+  if (audioUrl) console.log('[AUDIO] URL detectada:', audioUrl);
+  if (!audioUrl && mensagem === '' && body.type === 'ReceivedCallback') {
+    // Tentar extrair URL de qualquer campo que contenha 'audio' ou 'media'
+    const bodyStr = JSON.stringify(body);
+    const audioMatch = bodyStr.match(/"(https?:[^"]*\.(?:ogg|mp3|mp4|wav|opus|m4a|aac)[^"]*)"/i);
+    if (audioMatch) { audioUrl = audioMatch[1]; console.log('[AUDIO] URL extraída do body:', audioUrl); }
+  }
+  console.log('[EXTRACT]', { phone, mensagem: mensagem.substring(0,50), audioUrl: audioUrl ? 'SIM' : 'NAO', type: body.type });
   return { telefone: phone, mensagem, audioUrl };
 }
 
@@ -337,6 +349,8 @@ app.post('/webhook', async (req, res) => {
       await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'identificado' });
       await dbCreate('Atendimento', { telefone, nome_cliente: nomeCompleto, id_cliente_receitanet: idCliente, motivo: 'boleto', mensagem_original: mensagemRecebida, estado_final: 'resolvido', data_atendimento: new Date().toISOString(), resolvido: true });
 
+      console.log('[BOLETO] Resposta receitanet:', JSON.stringify(boletos).substring(0,300));
+      const semBoleto = !boletos.success && boletos.msg && boletos.msg.toLowerCase().includes('nenhum');
       if (boletos.success && boletos.boletos && boletos.boletos.length > 0) {
         let msg = `Aqui estão seus boletos em aberto, *${nome}*:\n\n`;
         for (const b of boletos.boletos.slice(0, 3)) {
@@ -346,7 +360,7 @@ app.post('/webhook', async (req, res) => {
           msg += '\n';
         }
         await enviarMensagem(telefone, msg.trim());
-      } else if (boletos.success) {
+      } else if (boletos.success || semBoleto) {
         await enviarMensagem(telefone, `Boa notícia, *${nome}*! Não encontrei nenhuma fatura em aberto na sua conta. Tudo em dia! ✅`);
       } else {
         await enviarMensagem(telefone, `*${nome}*, não consegui carregar seus boletos agora. Tenta de novo em alguns minutos ou fala com nosso time: *(19) 3167-2161* 😊`);
