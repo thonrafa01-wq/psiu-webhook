@@ -202,6 +202,9 @@ app.post('/webhook', async (req, res) => {
       return res.json({ ok: true, msg: 'sem dados relevantes' });
     }
 
+    // LOG TEMPORÁRIO — ver exatamente o que chega
+    console.log('[WEBHOOK]', JSON.stringify({ telefone, mensagem: mensagemRecebida, body_keys: Object.keys(req.body), phone_raw: req.body.phone, from: req.body.from }));
+
     // Buscar cliente local no Base44 (tentar variações do telefone)
     let clientesLocal = await dbFilter('ClienteWhatsapp', { telefone });
     if (!Array.isArray(clientesLocal) || clientesLocal.length === 0) {
