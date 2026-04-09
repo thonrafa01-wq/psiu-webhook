@@ -555,7 +555,15 @@ async function handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente) {
 async function handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente) {
   const luzVermelha = mensagem.toLowerCase().match(/luz vermelha|vermelho|piscando/);
   const dadosEquip  = await buscarClientePorId(idCliente);
-  const equipOnline = dadosEquip.success && dadosEquip.contratos && !dadosEquip.contratos.servidor?.isManutencao;
+  // Equipamento online = tem IP atribuído no servidor (PPPoE/etc)
+  // ip === null significa que não está conectado (offline)
+  const contrato = dadosEquip.success && Array.isArray(dadosEquip.contratos)
+    ? dadosEquip.contratos[0]
+    : dadosEquip.success && dadosEquip.contratos
+    ? dadosEquip.contratos
+    : null;
+  const equipOnline = contrato?.servidor?.ip !== null && contrato?.servidor?.ip !== undefined;
+  console.log('[EQUIP] ip:', contrato?.servidor?.ip, '| online:', equipOnline, '| isManutencao:', contrato?.servidor?.isManutencao);
 
   const chamado   = await abrirChamado(idCliente, telefone);
   const protocolo = chamado.protocolo || chamado.idSuporte || 'gerado';
