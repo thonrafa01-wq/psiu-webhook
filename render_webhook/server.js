@@ -8,7 +8,7 @@ app.use(express.urlencoded({ extended: true }));
 const RECEITANET_CHATBOT_TOKEN = process.env.RECEITANET_CHATBOT_TOKEN || '';
 const RECEITANET_BASE = 'https://sistema.receitanet.net/api/novo/chatbot';
 const BASE44_APP_ID = '69d55fd1a341508858f11d46';
-const BASE44_SERVICE_TOKEN = process.env.BASE44_SERVICE_TOKEN || '';
+// BASE44_SERVICE_TOKEN lido dinamicamente via process.env nas funções
 
 const ZAPI_INSTANCE = '3F15DC3330DCC11BF2A3BE4FDF68D33E';
 const ZAPI_TOKEN = '0BD8484CB7BFF2DAD22E99B5';
@@ -22,9 +22,9 @@ async function dbFilter(entity, query) {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(query)) params.append(k, v);
   const url = `${BASE44_API}/${entity}?${params.toString()}`;
-  console.log('[DB] GET', url, '| token:', BASE44_SERVICE_TOKEN ? BASE44_SERVICE_TOKEN.substring(0,20)+'...' : 'VAZIO');
+  console.log('[DB] GET', url, '| token:', process.env.BASE44_SERVICE_TOKEN ? process.env.BASE44_SERVICE_TOKEN.substring(0,20)+'...' : 'VAZIO');
   const res = await fetch(url, {
-    headers: { 'Authorization': `Bearer ${BASE44_SERVICE_TOKEN}`, 'Content-Type': 'application/json' }
+    headers: { 'Authorization': `Bearer ${process.env.BASE44_SERVICE_TOKEN || ''}`, 'Content-Type': 'application/json' }
   });
   const data = await res.json();
   console.log('[DB] GET result:', JSON.stringify(data).substring(0,200));
@@ -36,7 +36,7 @@ async function dbCreate(entity, data) {
   console.log('[DB] POST', url, JSON.stringify(data).substring(0,100));
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${BASE44_SERVICE_TOKEN}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${process.env.BASE44_SERVICE_TOKEN || ''}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
   const result = await res.json();
@@ -47,7 +47,7 @@ async function dbCreate(entity, data) {
 async function dbUpdate(entity, id, data) {
   const res = await fetch(`${BASE44_API}/${entity}/${id}`, {
     method: 'PUT',
-    headers: { 'Authorization': `Bearer ${BASE44_SERVICE_TOKEN}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${process.env.BASE44_SERVICE_TOKEN || ''}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
   return await res.json();
