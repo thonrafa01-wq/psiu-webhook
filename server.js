@@ -796,6 +796,24 @@ async function handleAtendente(cliente, telefone, mensagem, nome, nomeCompleto, 
 // ═════════════════════════════════════════════════════════════════════════════
 // ENDPOINT /encerrar — chamado pelo painel para encerrar atendimento humano
 // ═════════════════════════════════════════════════════════════════════════════
+// ─── Endpoint: dados do dashboard (acesso service role) ────────────────────
+app.get('/dashboard-data', async (req, res) => {
+  try {
+    const [atendimentos, clientes] = await Promise.all([
+      dbFilter('Atendimento', { limit: 500, sort: '-data_atendimento' }),
+      dbFilter('ClienteWhatsapp', { limit: 500 })
+    ]);
+    res.json({
+      success: true,
+      atendimentos: Array.isArray(atendimentos) ? atendimentos : [],
+      clientes: Array.isArray(clientes) ? clientes : []
+    });
+  } catch (e) {
+    console.error('[dashboard-data] Erro:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/encerrar', async (req, res) => {
   try {
     const { telefone } = req.body;
