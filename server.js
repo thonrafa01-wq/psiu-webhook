@@ -187,7 +187,7 @@ app.get('/webhook', (req, res) => res.send('PSIU TELECOM Webhook - OK'));
 app.post('/webhook', async (req, res) => {
   try {
     const body = req.body;
-    console.log('Webhook:', JSON.stringify(body).substring(0, 400));
+    console.log('Webhook:', JSON.stringify(body).substring(0, 2000));
 
     const { telefone, mensagem: mensagemTexto, audioUrl } = extrairDados(body);
 
