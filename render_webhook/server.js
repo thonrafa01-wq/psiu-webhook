@@ -20,19 +20,27 @@ const BASE44_API = `https://app.base44.com/api/apps/${BASE44_APP_ID}/entities`;
 async function dbFilter(entity, query) {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(query)) params.append(k, v);
-  const res = await fetch(`${BASE44_API}/${entity}?${params.toString()}`, {
+  const url = `${BASE44_API}/${entity}?${params.toString()}`;
+  console.log('[DB] GET', url, '| token:', BASE44_SERVICE_TOKEN ? BASE44_SERVICE_TOKEN.substring(0,20)+'...' : 'VAZIO');
+  const res = await fetch(url, {
     headers: { 'Authorization': `Bearer ${BASE44_SERVICE_TOKEN}`, 'Content-Type': 'application/json' }
   });
-  return await res.json();
+  const data = await res.json();
+  console.log('[DB] GET result:', JSON.stringify(data).substring(0,200));
+  return data;
 }
 
 async function dbCreate(entity, data) {
-  const res = await fetch(`${BASE44_API}/${entity}`, {
+  const url = `${BASE44_API}/${entity}`;
+  console.log('[DB] POST', url, JSON.stringify(data).substring(0,100));
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${BASE44_SERVICE_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
-  return await res.json();
+  const result = await res.json();
+  console.log('[DB] POST result:', JSON.stringify(result).substring(0,200));
+  return result;
 }
 
 async function dbUpdate(entity, id, data) {
