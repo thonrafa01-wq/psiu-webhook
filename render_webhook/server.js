@@ -208,14 +208,99 @@ app.post('/webhook', async (req, res) => {
     }
 
     if (mensagemRecebida.trim() === '2' || intencao === 'suporte') {
-      const chamado = await abrirChamado(idCliente, telefone);
-      await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'menu' });
-      await dbCreate('Atendimento', { telefone, nome_cliente: nome, id_cliente_receitanet: idCliente, motivo: 'suporte', mensagem_original: mensagemRecebida, estado_final: 'chamado_aberto', data_atendimento: new Date().toISOString(), resolvido: false });
-      if (chamado.success) {
-        await enviarMensagem(telefone, `🔧 *${nome}*, chamado de suporte aberto com sucesso!\n\n📋 Número: *${chamado.protocolo || chamado.idSuporte || 'gerado'}*\n\nNossa equipe técnica foi notificada e entrará em contato em breve. ⏱️`);
-      } else {
-        await enviarMensagem(telefone, `🔧 Vou acionar nossa equipe técnica para você, *${nome}*!\n\nUm técnico entrará em contato em breve. Se preferir falar agora, ligue: *0800-xxx-xxxx*`);
+      // Verificar se é massiva (muitos chamados abertos recentemente)
+      const agora = new Date();
+      const cincoMinAtras = new Date(agora.getTime() - 5 * 60 * 1000).toISOString();
+      const chamadosRecentes = await dbFilter('Atendimento', { motivo: 'suporte', estado_final: 'chamado_aberto' });
+      const massiva = Array.isArray(chamadosRecentes) && chamadosRecentes.filter(c => c.data_atendimento >= cincoMinAtras).length >= 3;
+
+      if (massiva) {
+        await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'menu' });
+        await dbCreate('Atendimento', { telefone, nome_cliente: nome, id_cliente_receitanet: idCliente, motivo: 'suporte', mensagem_original: mensagemRecebida, estado_final: 'massiva', data_atendimento: new Date().toISOString(), resolvido: false });
+        await enviarMensagem(telefone, `Oi, *${nome}*! 😔\n\nIdentificamos que estamos passando por uma instabilidade na rede que pode estar afetando sua região. Nossa equipe já foi acionada e está trabalhando na resolução.\n\n⏱️ *Previsão de normalização: até 5 horas* (podendo haver alterações conforme o andamento dos reparos).\n\nAssim que tudo for normalizado, você receberá uma mensagem aqui. Pedimos desculpas pelo transtorno! 🙏`);
+        return res.json({ ok: true });
       }
+
+      // Buscar dados atualizados do cliente pra verificar status do equipamento
+      const dadosAtualizados = await buscarClientePorCpf(clienteLocal.cpf_cnpj || '');
+      const ipOnline = dadosAtualizados.success && dadosAtualizados.contratos && dadosAtualizados.contratos.servidor && dadosAtualizados.contratos.servidor.ip;
+      const emManutencao = dadosAtualizados.success && dadosAtualizados.contratos && dadosAtualizados.contratos.servidor && dadosAtualizados.contratos.servidor.isManutencao;
+
+      if (emManutencao) {
+        const msgManutencao = dadosAtualizados.contratos.servidor.mensagemManutencao || 'Estamos realizando uma manutenção programada na sua região.';
+        await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'menu' });
+        await dbCreate('Atendimento', { telefone, nome_cliente: nome, id_cliente_receitanet: idCliente, motivo: 'suporte', mensagem_original: mensagemRecebida, estado_final: 'manutencao', data_atendimento: new Date().toISOString(), resolvido: false });
+        await enviarMensagem(telefone, `Oi, *${nome}*! 🔧\n\n${msgManutencao}\n\nNossa equipe está trabalhando para concluir o mais rápido possível. Assim que normalizar, você será avisado por aqui. Obrigado pela paciência! 🙏`);
+        return res.json({ ok: true });
+      }
+
+      if (ipOnline) {
+        // Equipamento ONLINE — orientar reset antes de abrir chamado
+        await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'suporte_aguardando_reset', ultimo_contato: new Date().toISOString() });
+        await enviarMensagem(telefone, `Oi, *${nome}*! Verifiquei aqui e seu equipamento está aparecendo *online* nos nossos sistemas. 🟢\n\nMuitas vezes isso é resolvido com um simples reinício. Por favor, tente o seguinte:\n\n👉 *Desligue o equipamento da tomada, aguarde 2 minutinhos e ligue novamente.*\n\nApós religar, espera uns 3 minutinhos para a conexão estabilizar e me avisa se voltou! 😊`);
+        return res.json({ ok: true });
+      }
+
+      // Equipamento OFFLINE — pedir verificação das luzes
+      await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'suporte_verificando_luzes', ultimo_contato: new Date().toISOString() });
+      await enviarMensagem(telefone, `Oi, *${nome}*! Verifiquei aqui e seu equipamento está aparecendo *offline* nos nossos sistemas. 🔴\n\nPreciso da sua ajuda pra entender melhor o que está acontecendo. Pode verificar as luzes do equipamento (roteador/ONU) pra mim?\n\n👀 *Está com alguma luz acesa?* Se sim, tem alguma *luz vermelha piscando*?\n\nMe conta o que você está vendo! 😊`);
+      return res.json({ ok: true });
+    }
+
+    // Resposta pós-reset (cliente avisou se voltou ou não)
+    if (clienteLocal.estado_conversa === 'suporte_aguardando_reset') {
+      const voltou = mensagemRecebida.toLowerCase().match(/sim|voltou|funcionou|ok|tá|ta|funcionando|resolveu/);
+      const naovoltou = mensagemRecebida.toLowerCase().match(/não|nao|continua|ainda|mesmo|problema|sem/);
+
+      if (voltou) {
+        await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'menu' });
+        await enviarMensagem(telefone, `Ótimo, *${nome}*! 🎉 Fico feliz que tenha resolvido!\n\nQualquer outra coisa é só me chamar. Tenha um ótimo dia! 😊`);
+        return res.json({ ok: true });
+      }
+
+      if (naovoltou) {
+        // Buscar status atualizado
+        const dadosAgora = await buscarClientePorCpf(clienteLocal.cpf_cnpj || '');
+        const aindaOnline = dadosAgora.success && dadosAgora.contratos && dadosAgora.contratos.servidor && dadosAgora.contratos.servidor.ip;
+        if (aindaOnline) {
+          await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'menu' });
+          await dbCreate('Atendimento', { telefone, nome_cliente: nome, id_cliente_receitanet: idCliente, motivo: 'suporte', mensagem_original: mensagemRecebida, estado_final: 'chamado_aberto', data_atendimento: new Date().toISOString(), resolvido: false });
+          const chamado2 = await abrirChamado(idCliente, telefone);
+          await enviarMensagem(telefone, `Entendido, *${nome}*! 🔧 Mesmo com o equipamento aparecendo online daqui, algo pode estar instável. Abri um chamado pra nossa equipe verificar com mais cuidado.\n\n📋 *Protocolo: ${chamado2.protocolo || chamado2.idSuporte || 'gerado'}*\n\nEm breve um técnico entrará em contato. Qualquer dúvida é só chamar! 🙏`);
+        } else {
+          await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'suporte_verificando_luzes' });
+          await enviarMensagem(telefone, `Tudo bem, *${nome}*! Agora o equipamento está aparecendo *offline* aqui. 🔴\n\nPode verificar as luzes do equipamento pra mim? Tem alguma *luz vermelha piscando*? Me conta o que você está vendo! 😊`);
+        }
+        return res.json({ ok: true });
+      }
+
+      // Resposta ambígua — repetir pergunta
+      await enviarMensagem(telefone, `Conseguiu religar o equipamento, *${nome}*? A internet voltou? 😊`);
+      return res.json({ ok: true });
+    }
+
+    // Resposta sobre as luzes do equipamento
+    if (clienteLocal.estado_conversa === 'suporte_verificando_luzes') {
+      const temLuzVermelha = mensagemRecebida.toLowerCase().match(/vermelh|piscan|red|alarm/);
+      const semLuz = mensagemRecebida.toLowerCase().match(/apagad|sem luz|desligad|nenhuma|não tem|nao tem/);
+
+      if (semLuz) {
+        await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'menu' });
+        await enviarMensagem(telefone, `Entendido, *${nome}*! Se o equipamento está sem nenhuma luz, provavelmente está sem energia.\n\n👉 Verifique se o cabo de energia está bem encaixado na tomada e no equipamento.\n\nSe mesmo assim não ligar, entre em contato novamente que acionamos um técnico para verificar! 🔧`);
+        return res.json({ ok: true });
+      }
+
+      if (temLuzVermelha) {
+        await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'menu' });
+        await dbCreate('Atendimento', { telefone, nome_cliente: nome, id_cliente_receitanet: idCliente, motivo: 'suporte', mensagem_original: 'Equipamento offline com luz vermelha piscando - ' + mensagemRecebida, estado_final: 'chamado_aberto', data_atendimento: new Date().toISOString(), resolvido: false });
+        const chamado3 = await abrirChamado(idCliente, telefone);
+        await enviarMensagem(telefone, `Entendido, *${nome}*! A luz vermelha piscando indica uma falha na fibra óptica — isso precisa de uma visita técnica. 🔧\n\nJá passei o chamado para a nossa *equipe de campo* com o relato do que você me descreveu.\n\n📋 *Protocolo: ${chamado3.protocolo || chamado3.idSuporte || 'gerado'}*\n\nVamos entrar em contato em breve para *agendar a visita*. Pedimos desculpas pelo inconveniente e obrigado pela paciência! 🙏`);
+        return res.json({ ok: true });
+      }
+
+      // Luzes acesas mas sem vermelha — tentar reset
+      await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'suporte_aguardando_reset' });
+      await enviarMensagem(telefone, `Certo, *${nome}*! As luzes estão acesas mas sem luz vermelha. Pode ser uma instabilidade temporária.\n\n👉 Tente *desligar o equipamento da tomada por 2 minutinhos* e depois ligar novamente.\n\nDepois me avisa se a internet voltou! 😊`);
       return res.json({ ok: true });
     }
 
