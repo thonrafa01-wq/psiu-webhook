@@ -68,7 +68,7 @@ async function buscarClientePorCpf(cpfcnpj) {
 async function buscarBoletos(idCliente, contato) {
   const res = await fetch(`${RECEITANET_BASE}/boletos`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: RECEITANET_CHATBOT_TOKEN, app: 'chatbot', idCliente, contato, tipo: 'whatsapp' })
+    body: JSON.stringify({ token: RECEITANET_CHATBOT_TOKEN, app: 'chatbot', idCliente, contato, tipo: 'sms' })
   });
   return await res.json();
 }
@@ -103,25 +103,29 @@ async function enviarMensagem(telefone, mensagem) {
   return data;
 }
 
-// ── Transcrição de áudio ──────────────────────────────────────────────────────
+// ── Transcrição de áudio via Groq ────────────────────────────────────────────
 async function transcreverAudio(audioUrl) {
   try {
+    console.log('[GROQ] Baixando áudio:', audioUrl);
     const audioRes = await fetch(audioUrl);
     if (!audioRes.ok) throw new Error('Erro ao baixar áudio: ' + audioRes.status);
     const buffer = Buffer.from(await audioRes.arrayBuffer());
+    console.log('[GROQ] Áudio baixado, tamanho:', buffer.length, 'bytes');
     const form = new FormData();
     form.append('file', buffer, { filename: 'audio.ogg', contentType: 'audio/ogg' });
-    form.append('model', 'whisper-1');
+    form.append('model', 'whisper-large-v3-turbo');
     form.append('language', 'pt');
-    const whisperRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    form.append('response_format', 'json');
+    const groqRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`, ...form.getHeaders() },
+      headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}`, ...form.getHeaders() },
       body: form
     });
-    const data = await whisperRes.json();
+    const data = await groqRes.json();
+    console.log('[GROQ] Transcrição:', JSON.stringify(data).substring(0, 200));
     return data.text || null;
   } catch (e) {
-    console.error('Erro transcrição:', e.message);
+    console.error('[GROQ] Erro transcrição:', e.message);
     return null;
   }
 }
