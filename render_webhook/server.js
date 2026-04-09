@@ -54,27 +54,39 @@ async function dbUpdate(entity, id, data) {
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 async function buscarClientePorTelefone(phone) {
-  const url = `${RECEITANET_BASE}/clientes?token=${RECEITANET_CHATBOT_TOKEN}&app=chatbot&phone=${phone}`;
-  const res = await fetch(url, { method: 'POST' });
+  const res = await fetch(`${RECEITANET_BASE}/clientes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: RECEITANET_CHATBOT_TOKEN, app: 'chatbot', phone })
+  });
   return await res.json();
 }
 
 async function buscarClientePorCpf(cpfcnpj) {
   const cpf = cpfcnpj.replace(/\D/g, '');
-  const url = `${RECEITANET_BASE}/clientes?token=${RECEITANET_CHATBOT_TOKEN}&app=chatbot&cpfcnpj=${cpf}`;
-  const res = await fetch(url, { method: 'POST' });
+  const res = await fetch(`${RECEITANET_BASE}/clientes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: RECEITANET_CHATBOT_TOKEN, app: 'chatbot', cpfcnpj: cpf })
+  });
   return await res.json();
 }
 
 async function buscarBoletos(idCliente, contato) {
-  const url = `${RECEITANET_BASE}/boletos?token=${RECEITANET_CHATBOT_TOKEN}&app=chatbot&idCliente=${idCliente}&contato=${contato}&tipo=whatsapp`;
-  const res = await fetch(url, { method: 'POST' });
+  const res = await fetch(`${RECEITANET_BASE}/boletos`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: RECEITANET_CHATBOT_TOKEN, app: 'chatbot', idCliente, contato, tipo: 'whatsapp' })
+  });
   return await res.json();
 }
 
 async function abrirChamado(idCliente, contato) {
-  const url = `${RECEITANET_BASE}/abertura-chamado?token=${RECEITANET_CHATBOT_TOKEN}&app=chatbot&idCliente=${idCliente}&contato=${contato}&ocorrenciatipo=1&motivoos=1`;
-  const res = await fetch(url, { method: 'POST' });
+  const res = await fetch(`${RECEITANET_BASE}/abertura-chamado`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: RECEITANET_CHATBOT_TOKEN, app: 'chatbot', idCliente, contato, ocorrenciatipo: 1, motivoos: 1 })
+  });
   return await res.json();
 }
 
