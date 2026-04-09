@@ -1,4 +1,5 @@
 const express = require('express');
+const FormData = require('form-data');
 const fetch = require('node-fetch');
 const app = express();
 app.use(express.json());
@@ -112,6 +113,36 @@ function classificarIntencao(mensagem) {
   return 'outro';
 }
 
+async function transcreverAudio(audioUrl) {
+  try {
+    console.log('Baixando áudio:', audioUrl);
+    const audioRes = await fetch(audioUrl);
+    if (!audioRes.ok) throw new Error('Erro ao baixar áudio: ' + audioRes.status);
+    const audioBuffer = await audioRes.arrayBuffer();
+    const buffer = Buffer.from(audioBuffer);
+
+    const form = new FormData();
+    form.append('file', buffer, { filename: 'audio.ogg', contentType: 'audio/ogg' });
+    form.append('model', 'whisper-1');
+    form.append('language', 'pt');
+
+    const whisperRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        ...form.getHeaders()
+      },
+      body: form
+    });
+    const whisperData = await whisperRes.json();
+    console.log('Whisper resposta:', JSON.stringify(whisperData).substring(0, 200));
+    return whisperData.text || null;
+  } catch (e) {
+    console.error('Erro transcrição áudio:', e.message);
+    return null;
+  }
+}
+
 function extrairDados(body) {
   if (body.isGroupMsg === true) return { telefone: '', mensagem: '' };
   if (body.fromMe === true) return { telefone: '', mensagem: '' };
@@ -123,7 +154,15 @@ function extrairDados(body) {
   } else {
     mensagem = String(body.message || body.content || body.body || '');
   }
-  return { telefone: phone, mensagem };
+  // Detectar mensagem de áudio
+  let audioUrl = null;
+  if (body.type === 'ReceivedCallback' && body.audio) {
+    audioUrl = body.audio.audioUrl || body.audio.url || null;
+  } else if (body.audio && (body.audio.audioUrl || body.audio.url)) {
+    audioUrl = body.audio.audioUrl || body.audio.url || null;
+  }
+
+  return { telefone: phone, mensagem, audioUrl };
 }
 
 // ── Webhook principal ─────────────────────────────────────────────────────────
@@ -135,7 +174,27 @@ app.post('/webhook', async (req, res) => {
     const body = req.body;
     console.log('Webhook recebido:', JSON.stringify(body).substring(0, 500));
 
-    const { telefone, mensagem: mensagemRecebida } = extrairDados(body);
+    const { telefone, mensagem: mensagemTexto, audioUrl } = extrairDados(body);
+
+    // Transcrever áudio se necessário
+    let mensagemRecebida = mensagemTexto;
+    if (audioUrl && !mensagemTexto) {
+      console.log('Áudio detectado, transcrevendo...');
+      const transcricao = await transcreverAudio(audioUrl);
+      if (transcricao) {
+        mensagemRecebida = transcricao;
+        console.log('Transcrição:', transcricao);
+      } else {
+        // Não conseguiu transcrever
+        if (telefone) {
+          const clientes = await dbFilter('ClienteWhatsapp', { telefone });
+          const nome = clientes && clientes[0] && clientes[0].nome ? clientes[0].nome.split(' ')[0] : 'cliente';
+          await enviarMensagem(telefone, `Oi, ${nome}! 😊 Recebi seu áudio mas tive dificuldade em entender. Pode digitar sua mensagem? Assim consigo te ajudar melhor!`);
+        }
+        return res.json({ ok: true, msg: 'audio nao transcrito' });
+      }
+    }
+
     if (!telefone || !mensagemRecebida) {
       return res.json({ ok: true, msg: 'sem dados relevantes' });
     }
