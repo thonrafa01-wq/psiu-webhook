@@ -21,14 +21,26 @@ const MOTIVO_COLOR = {
 
 const ESTADO_COLOR = {
   resolvido_auto: "bg-green-100 text-green-800",
+  resolvido: "bg-green-100 text-green-800",
   transferido_humano: "bg-orange-100 text-orange-800",
+  encaminhado_atendente: "bg-orange-100 text-orange-800",
   em_andamento: "bg-blue-100 text-blue-800",
+  chamado_aberto: "bg-red-100 text-red-800",
+  massiva: "bg-purple-100 text-purple-800",
+  manutencao: "bg-yellow-100 text-yellow-800",
+  audio_nao_transcrito: "bg-gray-100 text-gray-600",
 };
 
 const ESTADO_LABEL = {
   resolvido_auto: "✅ Resolvido",
-  transferido_humano: "👨‍💻 Humano",
+  resolvido: "✅ Resolvido",
+  transferido_humano: "👨‍💻 Atendente",
+  encaminhado_atendente: "👨‍💻 Atendente",
   em_andamento: "⏳ Em andamento",
+  chamado_aberto: "🔧 Chamado Aberto",
+  massiva: "⚠️ Massiva",
+  manutencao: "🛠️ Manutenção",
+  audio_nao_transcrito: "🎤 Áudio não lido",
 };
 
 function LoginScreen({ onLogin }) {
@@ -126,7 +138,7 @@ export default function Dashboard() {
   const hoje = new Date().toISOString().slice(0, 10);
   const atHoje = atendimentos.filter(a => a.data_atendimento?.slice(0, 10) === hoje);
   const emAtendimentoHumano = clientes.filter(c => c.estado_conversa === "aguardando_humano");
-  const resolvidosAuto = atendimentos.filter(a => a.estado_final === "resolvido_auto").length;
+  const resolvidosAuto = atendimentos.filter(a => a.estado_final === "resolvido_auto" || a.estado_final === "resolvido").length;
   const totalAtendimentos = atendimentos.length;
   const taxaResolucao = totalAtendimentos > 0 ? Math.round((resolvidosAuto / totalAtendimentos) * 100) : 0;
 
