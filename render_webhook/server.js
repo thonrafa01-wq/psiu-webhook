@@ -128,26 +128,26 @@ app.post('/webhook', async (req, res) => {
     if (!clienteLocal || !clienteLocal.identificado) {
       const resultadoBusca = await buscarClientePorTelefone(telefone);
 
-      if (resultadoBusca.success && resultadoBusca.id) {
+      if (resultadoBusca.success && resultadoBusca.contratos && resultadoBusca.contratos.idCliente) {
         const dadosCliente = {
-          telefone, id_cliente_receitanet: String(resultadoBusca.id),
-          nome: resultadoBusca.nome || '', cpf_cnpj: resultadoBusca.cpfcnpj || '',
+          telefone, id_cliente_receitanet: String(resultadoBusca.contratos.idCliente),
+          nome: resultadoBusca.contratos.razaoSocial || '', cpf_cnpj: resultadoBusca.contratos.cpfCnpj || '',
           identificado: true, ultimo_contato: new Date().toISOString(), estado_conversa: 'menu'
         };
         if (clienteLocal) { await dbUpdate('ClienteWhatsapp', clienteLocal.id, dadosCliente); clienteLocal = { ...clienteLocal, ...dadosCliente }; }
         else { clienteLocal = await dbCreate('ClienteWhatsapp', dadosCliente); }
-        await dbCreate('Atendimento', { telefone, nome_cliente: resultadoBusca.nome || '', id_cliente_receitanet: String(resultadoBusca.id), motivo: 'menu', mensagem_original: mensagemRecebida, estado_final: 'em_andamento', data_atendimento: new Date().toISOString(), resolvido: false });
-        await enviarMensagem(telefone, `Olá, *${resultadoBusca.nome}*! 👋\n\nSou o assistente virtual da *PSIU TELECOM*. Como posso te ajudar?\n\n1️⃣ Segunda via de boleto/PIX\n2️⃣ Suporte técnico (sem internet)\n3️⃣ Falar com atendente\n\nDigite o número da opção ou descreva o que precisa.`);
+        await dbCreate('Atendimento', { telefone, nome_cliente: resultadoBusca.contratos.razaoSocial || '', id_cliente_receitanet: String(resultadoBusca.contratos.idCliente), motivo: 'menu', mensagem_original: mensagemRecebida, estado_final: 'em_andamento', data_atendimento: new Date().toISOString(), resolvido: false });
+        await enviarMensagem(telefone, `Olá, *${resultadoBusca.contratos.razaoSocial}*! 👋\n\nSou o assistente virtual da *PSIU TELECOM*. Como posso te ajudar?\n\n1️⃣ Segunda via de boleto/PIX\n2️⃣ Suporte técnico (sem internet)\n3️⃣ Falar com atendente\n\nDigite o número da opção ou descreva o que precisa.`);
         return res.json({ ok: true });
       }
 
       if (clienteLocal?.estado_conversa === 'aguardando_cpf') {
         const resultadoCpf = await buscarClientePorCpf(mensagemRecebida);
-        if (resultadoCpf.success && resultadoCpf.id) {
-          const dadosCliente = { telefone, id_cliente_receitanet: String(resultadoCpf.id), nome: resultadoCpf.nome || '', cpf_cnpj: resultadoCpf.cpfcnpj || '', identificado: true, ultimo_contato: new Date().toISOString(), estado_conversa: 'menu' };
+        if (resultadoCpf.success && resultadoCpf.contratos && resultadoCpf.contratos.idCliente) {
+          const dadosCliente = { telefone, id_cliente_receitanet: String(resultadoCpf.contratos.idCliente), nome: resultadoCpf.contratos.razaoSocial || '', cpf_cnpj: resultadoCpf.contratos.cpfCnpj || '', identificado: true, ultimo_contato: new Date().toISOString(), estado_conversa: 'menu' };
           await dbUpdate('ClienteWhatsapp', clienteLocal.id, dadosCliente);
           clienteLocal = { ...clienteLocal, ...dadosCliente };
-          await enviarMensagem(telefone, `Ótimo, *${resultadoCpf.nome}*! ✅\n\nComo posso te ajudar?\n\n1️⃣ Segunda via de boleto/PIX\n2️⃣ Suporte técnico (sem internet)\n3️⃣ Falar com atendente`);
+          await enviarMensagem(telefone, `Ótimo, *${resultadoCpf.contratos.razaoSocial}*! ✅\n\nComo posso te ajudar?\n\n1️⃣ Segunda via de boleto/PIX\n2️⃣ Suporte técnico (sem internet)\n3️⃣ Falar com atendente`);
           return res.json({ ok: true });
         } else {
           await enviarMensagem(telefone, `Não consegui localizar seu cadastro. 😕\n\nTente novamente com seu CPF ou CNPJ, ou digite *0* para falar com um atendente.`);
