@@ -106,6 +106,7 @@ export default function Dashboard() {
   const [atendimentos, setAtendimentos] = useState([]);
   const [clientes, setClientes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [recarregando, setRecarregando] = useState(false);
   const [abaAtiva, setAbaAtiva] = useState("ativos");
   const [filtroMotivo, setFiltroMotivo] = useState("todos");
   const [salvandoId, setSalvandoId] = useState(null);
@@ -125,23 +126,37 @@ export default function Dashboard() {
   }
 
   async function carregarDados() {
+    setRecarregando(true);
     try {
-      const res = await fetch(`${WEBHOOK_URL}/dashboard-data`);
-      if (res.ok) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000); // 20s timeout
+      let res;
+      try {
+        res = await fetch(`${WEBHOOK_URL}/dashboard-data`, { signal: controller.signal });
+        clearTimeout(timeout);
+      } catch(fetchErr) {
+        clearTimeout(timeout);
+        console.warn('[Dashboard] Render indisponível:', fetchErr.message);
+        res = null;
+      }
+      if (res && res.ok) {
         const data = await res.json();
         setAtendimentos(data.atendimentos || []);
         setClientes(data.clientes || []);
       } else {
-        // fallback para SDK se Render não responder
+        // fallback: SDK direto
         const [ats, cls] = await Promise.all([
           Atendimento.list({ sort: "-data_atendimento", limit: 500 }),
           ClienteWhatsapp.list({ limit: 500 }),
         ]);
-        setAtendimentos(ats);
-        setClientes(cls);
+        setAtendimentos(ats || []);
+        setClientes(cls || []);
       }
+    } catch(e) {
+      console.error('[Dashboard] Erro ao carregar:', e.message);
     } finally {
       setLoading(false);
+      setRecarregando(false);
     }
   }
 
@@ -257,7 +272,9 @@ export default function Dashboard() {
                 {emAtendimentoHumano.length} humano
               </span>
             )}
-            <button onClick={carregarDados} className="bg-green-500 hover:bg-green-400 p-2 rounded-lg text-sm">🔄</button>
+            <button onClick={carregarDados} disabled={recarregando} className={`${recarregando ? 'bg-green-300 cursor-wait' : 'bg-green-500 hover:bg-green-400'} p-2 rounded-lg text-sm transition-colors`}>
+              {recarregando ? '⏳' : '🔄'}
+            </button>
             <button onClick={() => { sessionStorage.removeItem("psiu_auth"); setAutenticado(false); }} className="bg-green-700 hover:bg-green-600 p-2 rounded-lg text-sm">🚪</button>
           </div>
         </div>

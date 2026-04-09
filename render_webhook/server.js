@@ -805,6 +805,10 @@ async function handleAtendente(cliente, telefone, mensagem, nome, nomeCompleto, 
 // ═════════════════════════════════════════════════════════════════════════════
 // ENDPOINT /encerrar — chamado pelo painel para encerrar atendimento humano
 // ═════════════════════════════════════════════════════════════════════════════
+// ─── Endpoint: health/ping ─────────────────────────────────────────────────
+app.get('/ping', (req, res) => res.json({ ok: true, ts: Date.now() }));
+app.get('/health', (req, res) => res.json({ status: 'ok', ts: Date.now() }));
+
 // ─── Endpoint: dados do dashboard (acesso service role) ────────────────────
 app.get('/dashboard-data', async (req, res) => {
   try {
