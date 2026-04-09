@@ -15,7 +15,7 @@ const ZAPI_CLIENT_TOKEN = 'Fe4e0f41827564db0813cd79b7c5f6e96S';
 const ZAPI_BASE = `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}`;
 
 // ── Base44 Entity helpers ─────────────────────────────────────────────────────
-const BASE44_API = `https://api.base44.com/api/apps/${BASE44_APP_ID}/entities`;
+const BASE44_API = `https://app.base44.com/api/apps/${BASE44_APP_ID}/entities`;
 
 async function dbFilter(entity, query) {
   const params = new URLSearchParams();
