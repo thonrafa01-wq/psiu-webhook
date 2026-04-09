@@ -107,7 +107,8 @@ async function classificarIntencao(mensagem) {
 Analise a mensagem do cliente e responda SOMENTE com um JSON válido, sem explicações.
 
 Intenções possíveis:
-- "boleto": cliente quer segunda via, boleto, fatura, pagamento ou PIX
+- "boleto": cliente quer segunda via, boleto, fatura ou PIX
+- "pagou": cliente diz que já pagou, efetuou pagamento, realizou pagamento, fez o pix, pagou hoje
 - "suporte": cliente relata problema com internet, sem sinal, lento, caiu, equipamento, luz vermelha
 - "cancelamento": cliente quer cancelar o serviço
 - "atendente": cliente quer falar com humano, contratar novo plano, instalar, mudança de endereço
@@ -150,7 +151,8 @@ Responda exatamente neste formato JSON:
 // Fallback regex caso Groq esteja indisponível
 function classificarIntencaoFallback(msg) {
   const m = msg.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  if (m.match(/boleto|fatura|pagar|pagamento|pix|segunda via|vencimento|debito|cobranca|conta/)) return 'boleto';
+  if (m.match(/boleto|fatura|pix|segunda via|vencimento|debito|cobranca|conta/)) return 'boleto';
+  if (m.match(/j[aá] paguei|j[aá] pago|efetuei|realizei|fiz o pix|paguei hoje|paguei ontem|efetuou|realizou|confirmei pagamento/)) return 'pagou';
   if (m.match(/sem internet|sem sinal|caiu|lento|travando|sem conexao|fibra|rompimento|nao funciona|parou|reinici|modem|roteador|luz vermelha|luz piscando|vermelho|offline|net caiu|sem net|sem wifi|wifi/)) return 'suporte';
   if (m.match(/cancelar|cancelamento|quero cancelar|desistir|nao quero mais/)) return 'cancelamento';
   if (m.match(/falar com|atendente|humano|pessoa|responsavel|gerente|contrato|plano|instalar|instalacao|mudanca|mudei|quero assinar|quero contratar|novo cliente|contratar/)) return 'atendente';
@@ -549,6 +551,18 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
     return;
   }
 
+  // ── Estado: aguardando confirmação de liberação em confiança ──────────────
+  if (estado === 'aguardando_liberacao') {
+    const m = mensagem.toLowerCase();
+    if (m.match(/sim|quero|pode|libera|confirmo|s[iì]m|yes|ok|certo/)) {
+      return handleLiberacaoConfirmada(cliente, telefone, nome, nomeCompleto, idCliente);
+    } else {
+      await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+      await enviarMensagem(telefone, `Tudo bem, *${nome}*! Quando o pagamento compensar no sistema, sua conexão será liberada automaticamente. Se precisar de mais alguma coisa, é só chamar 😊`);
+      return;
+    }
+  }
+
   // ── Estado: retenção de cancelamento ─────────────────────────────────────
   if (estado === 'cancelamento_retencao' && intencao !== 'boleto' && intencao !== 'suporte') {
     return handleRetencao(cliente, telefone, mensagem, nome);
@@ -556,6 +570,7 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
 
   // ── Intenções principais ──────────────────────────────────────────────────
   if (intencao === 'boleto')       return handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente);
+  if (intencao === 'pagou')        return handlePagou(cliente, telefone, nome, nomeCompleto, idCliente);
   if (intencao === 'suporte')      return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
   if (intencao === 'cancelamento') return handleCancelamento(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
   if (intencao === 'atendente')    return handleAtendente(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
@@ -635,6 +650,86 @@ async function handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, id
   } else {
     await enviarMensagem(telefone, `*${nome}*, seu equipamento está *offline* no nosso sistema. 📡\n\nTenta reiniciar: *desliga o roteador da tomada por 30 segundos e liga novamente.*\n\nJá abri um chamado (protocolo: ${protocolo}). Se não resolver, nossa equipe entra em contato! 🔧`);
     await alertarRafa('🔴', 'CHAMADO DE CAMPO', nomeCompleto, telefone, `Equipamento *offline*.\n📋 Protocolo: ${protocolo}`);
+  }
+}
+
+async function handlePagou(cliente, telefone, nome, nomeCompleto, idCliente) {
+  const cpf = cliente.cpf_cnpj ? cliente.cpf_cnpj.replace(/\D/g, '') : null;
+  const dados = cpf ? await buscarClientePorCpf(cpf) : await buscarClientePorId(idCliente);
+  const contrato = dados.success
+    ? (Array.isArray(dados.contratos) ? dados.contratos[0] : dados.contratos)
+    : null;
+
+  // Verificar se o cliente usa liberação em confiança e se ainda pode usar
+  const podeLiberar = contrato?.clienteLiberadoConfianca === 0 && contrato?.usouLiberacaoConfianca === 0;
+  const jaLiberado  = contrato?.clienteLiberadoConfianca === 1;
+  const jaUsou      = contrato?.usouLiberacaoConfianca === 1;
+  const valorAberto = parseFloat(contrato?.contratoValorAberto || 0);
+  const temDebito   = valorAberto > 0;
+
+  console.log('[PAGOU] podeLiberar:', podeLiberar, '| jaLiberado:', jaLiberado, '| jaUsou:', jaUsou, '| valorAberto:', valorAberto);
+
+  if (!contrato || !temDebito) {
+    // Sem débito — já está pago
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+    await enviarMensagem(telefone, `*${nome}*, não encontrei nenhum débito em aberto no seu cadastro. Tudo certo por aqui! ✅\n\nSe a conexão não voltou, pode ser processamento do banco. Tenta reiniciar o roteador 😊`);
+    return;
+  }
+
+  if (jaLiberado) {
+    // Já está em liberação
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+    await enviarMensagem(telefone, `*${nome}*, sua liberação em confiança já está ativa! Quando o pagamento compensar o sistema atualiza automaticamente. ✅`);
+    return;
+  }
+
+  if (jaUsou && !podeLiberar) {
+    // Já usou a liberação antes
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+    await enviarMensagem(telefone, `*${nome}*, infelizmente você já utilizou a liberação em confiança anteriormente. Nossa equipe vai verificar o pagamento manualmente e liberar assim que confirmado! ⏳\n\nSe tiver comprovante, pode enviar aqui 😊`);
+    await alertarRafa('💰', 'CLIENTE DISSE QUE PAGOU', nomeCompleto, telefone, `Débito: R$ ${valorAberto.toFixed(2)}\nJÁ USOU liberação em confiança antes — verificar manualmente!`);
+    return;
+  }
+
+  // Pode liberar — perguntar se quer
+  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_liberacao' });
+  await enviarMensagem(telefone, `Que ótimo, *${nome}*! 🎉\n\nAinda identifico um valor de *R$ ${valorAberto.toFixed(2).replace('.', ',')}* em aberto no sistema. Enquanto o pagamento não compensa, posso fazer uma *liberação em confiança* para sua internet voltar agora mesmo.\n\nDeseja que eu libere sua conexão? (Sim / Não)`);
+}
+
+async function handleLiberacaoConfirmada(cliente, telefone, nome, nomeCompleto, idCliente) {
+  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+  await enviarMensagem(telefone, `Perfeito, *${nome}*! Aguarda um momento enquanto processo a liberação... ⚙️`);
+
+  try {
+    const cpf = cliente.cpf_cnpj ? cliente.cpf_cnpj.replace(/\D/g, '') : null;
+    const dados = cpf ? await buscarClientePorCpf(cpf) : await buscarClientePorId(idCliente);
+    const contrato = dados.success
+      ? (Array.isArray(dados.contratos) ? dados.contratos[0] : dados.contratos)
+      : null;
+    const idContrato = contrato?.idContrato;
+
+    if (!idContrato) throw new Error('idContrato não encontrado');
+
+    // Chamar endpoint de liberação em confiança do Receitanet chatbot
+    const respLib = await fetch(`${RECEITANET_BASE}/liberacao-confianca`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: RECEITANET_TOKEN, app: 'chatbot', idContrato })
+    });
+    const libData = await respLib.json().catch(() => null);
+    console.log('[LIBERACAO] Resposta:', JSON.stringify(libData));
+
+    if (libData?.success) {
+      await registrarAtendimento(telefone, nomeCompleto, idCliente, 'liberacao_confianca', '', 'resolvido', true);
+      await enviarMensagem(telefone, `✅ *${nome}*, sua conexão foi liberada em confiança!\n\nSua internet deve voltar em alguns minutos. Reinicia o roteador se ainda não voltar.\n\nObrigado por ser nosso cliente! 💙`);
+    } else {
+      throw new Error(libData?.msg || 'Falha na liberação');
+    }
+  } catch (err) {
+    console.error('[LIBERACAO] Erro:', err.message);
+    await registrarAtendimento(telefone, nomeCompleto, idCliente, 'liberacao_confianca', '', 'erro_api', false);
+    await enviarMensagem(telefone, `*${nome}*, não consegui processar a liberação automaticamente agora. Nossa equipe vai verificar manualmente e te liberar em breve! 🙏`);
+    await alertarRafa('💰', 'LIBERAÇÃO EM CONFIANÇA SOLICITADA', nomeCompleto, telefone, `Cliente confirmou pagamento e pediu liberação em confiança.\nLIBERAR MANUALMENTE no painel do Receitanet!`);
   }
 }
 
