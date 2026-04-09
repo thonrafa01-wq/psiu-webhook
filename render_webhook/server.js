@@ -1,120 +1,90 @@
+'use strict';
 const express = require('express');
 const FormData = require('form-data');
 const fetch = require('node-fetch');
+
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-const RECEITANET_CHATBOT_TOKEN = process.env.RECEITANET_CHATBOT_TOKEN || '';
-const RECEITANET_BASE = 'https://sistema.receitanet.net/api/novo/chatbot';
-const BASE44_APP_ID = '69d55fd1a341508858f11d46';
-
-// Token dinâmico — atualizado via endpoint /update-token
-let BASE44_SERVICE_TOKEN_DYNAMIC = process.env.BASE44_SERVICE_TOKEN || '';
-const REFRESH_SECRET = process.env.REFRESH_SECRET || 'psiu2024refresh';
-
-const ZAPI_INSTANCE = '3F15DC3330DCC11BF2A3BE4FDF68D33E';
-const ZAPI_TOKEN = '0BD8484CB7BFF2DAD22E99B5';
+// ── Configurações ─────────────────────────────────────────────────────────────
+const RECEITANET_TOKEN  = process.env.RECEITANET_CHATBOT_TOKEN || '';
+const RECEITANET_BASE   = 'https://sistema.receitanet.net/api/novo/chatbot';
+const BASE44_APP_ID     = '69d55fd1a341508858f11d46';
+const BASE44_API        = `https://app.base44.com/api/apps/${BASE44_APP_ID}/entities`;
+const ZAPI_INSTANCE     = '3F15DC3330DCC11BF2A3BE4FDF68D33E';
+const ZAPI_TOKEN        = '0BD8484CB7BFF2DAD22E99B5';
 const ZAPI_CLIENT_TOKEN = 'Fe4e0f41827564db0813cd79b7c5f6e96S';
-const ZAPI_BASE = `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}`;
-const RAFA_PHONE = '5519999619605';
+const ZAPI_BASE         = `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}`;
+const RAFA_PHONE        = '5519999619605';
 
-const BASE44_API = `https://app.base44.com/api/apps/${BASE44_APP_ID}/entities`;
+const getServiceToken = () => process.env.BASE44_SERVICE_TOKEN || '';
 
 // ── DB helpers ────────────────────────────────────────────────────────────────
 async function dbFilter(entity, query) {
-  const params = new URLSearchParams();
-  for (const [k, v] of Object.entries(query)) params.append(k, v);
-  const url = `${BASE44_API}/${entity}?${params.toString()}`;
+  const params = new URLSearchParams(query).toString();
+  const url = `${BASE44_API}/${entity}?${params}`;
   console.log('[DB] GET', url.substring(0, 120));
   const res = await fetch(url, {
-    headers: { 'Authorization': `Bearer ${BASE44_SERVICE_TOKEN_DYNAMIC}`, 'Content-Type': 'application/json' }
+    headers: { 'Authorization': `Bearer ${getServiceToken()}`, 'Content-Type': 'application/json' }
   });
-  return await res.json();
+  return res.json();
 }
 
 async function dbCreate(entity, data) {
   const res = await fetch(`${BASE44_API}/${entity}`, {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${BASE44_SERVICE_TOKEN_DYNAMIC}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${getServiceToken()}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
-  return await res.json();
+  return res.json();
 }
 
 async function dbUpdate(entity, id, data) {
   const res = await fetch(`${BASE44_API}/${entity}/${id}`, {
     method: 'PUT',
-    headers: { 'Authorization': `Bearer ${BASE44_SERVICE_TOKEN_DYNAMIC}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${getServiceToken()}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
-  return await res.json();
+  return res.json();
 }
 
 // ── Receitanet helpers ────────────────────────────────────────────────────────
-async function buscarClientePorTelefone(phone) {
-  const res = await fetch(`${RECEITANET_BASE}/clientes`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: RECEITANET_CHATBOT_TOKEN, app: 'chatbot', phone })
+async function receitanetPost(endpoint, extraBody) {
+  const res = await fetch(`${RECEITANET_BASE}/${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: RECEITANET_TOKEN, app: 'chatbot', ...extraBody })
   });
-  return await res.json();
+  return res.json();
 }
 
-async function buscarClientePorCpf(cpfcnpj) {
-  const cpf = cpfcnpj.replace(/\D/g, '');
-  const res = await fetch(`${RECEITANET_BASE}/clientes`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: RECEITANET_CHATBOT_TOKEN, app: 'chatbot', cpfcnpj: cpf })
-  });
-  return await res.json();
-}
-
-async function buscarBoletos(idCliente, contato) {
-  const res = await fetch(`${RECEITANET_BASE}/boletos`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: RECEITANET_CHATBOT_TOKEN, app: 'chatbot', idCliente, contato, tipo: 'sms' })
-  });
-  return await res.json();
-}
-
-async function verificarEquipamento(idCliente) {
-  const res = await fetch(`${RECEITANET_BASE}/clientes`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: RECEITANET_CHATBOT_TOKEN, app: 'chatbot', idCliente })
-  });
-  return await res.json();
-}
-
-async function abrirChamado(idCliente, contato) {
-  const res = await fetch(`${RECEITANET_BASE}/abertura-chamado`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: RECEITANET_CHATBOT_TOKEN, app: 'chatbot', idCliente, contato, ocorrenciatipo: 1, motivoos: 1 })
-  });
-  return await res.json();
-}
+const buscarClientePorTelefone = (phone)    => receitanetPost('clientes', { phone });
+const buscarClientePorCpf      = (cpfcnpj)  => receitanetPost('clientes', { cpfcnpj: cpfcnpj.replace(/\D/g, '') });
+const buscarClientePorId       = (idCliente) => receitanetPost('clientes', { idCliente });
+const buscarBoletos            = (idCliente, contato) => receitanetPost('boletos', { idCliente, contato, tipo: 'sms' });
+const abrirChamado             = (idCliente, contato) => receitanetPost('abertura-chamado', { idCliente, contato, ocorrenciatipo: 1, motivoos: 1 });
 
 // ── Z-API ─────────────────────────────────────────────────────────────────────
 async function enviarMensagem(telefone, mensagem) {
-  let numero = telefone.replace(/\D/g, '');
-  if (!numero.startsWith('55')) numero = '55' + numero;
+  const numero = telefone.startsWith('55') ? telefone : '55' + telefone;
   const res = await fetch(`${ZAPI_BASE}/send-text`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'client-token': ZAPI_CLIENT_TOKEN },
     body: JSON.stringify({ phone: numero, message: mensagem })
   });
   const data = await res.json();
-  console.log('Z-API envio:', JSON.stringify(data).substring(0, 150));
+  console.log('[Z-API] envio:', JSON.stringify(data).substring(0, 150));
   return data;
 }
 
-// ── Transcrição de áudio via Groq ────────────────────────────────────────────
+// ── Transcrição de áudio via Groq ─────────────────────────────────────────────
 async function transcreverAudio(audioUrl) {
   try {
     console.log('[GROQ] Baixando áudio:', audioUrl);
     const audioRes = await fetch(audioUrl);
     if (!audioRes.ok) throw new Error('Erro ao baixar áudio: ' + audioRes.status);
     const buffer = Buffer.from(await audioRes.arrayBuffer());
-    console.log('[GROQ] Áudio baixado, tamanho:', buffer.length, 'bytes');
     const form = new FormData();
     form.append('file', buffer, { filename: 'audio.ogg', contentType: 'audio/ogg' });
     form.append('model', 'whisper-large-v3-turbo');
@@ -129,51 +99,67 @@ async function transcreverAudio(audioUrl) {
     console.log('[GROQ] Transcrição:', JSON.stringify(data).substring(0, 200));
     return data.text || null;
   } catch (e) {
-    console.error('[GROQ] Erro transcrição:', e.message);
+    console.error('[GROQ] Erro:', e.message);
     return null;
   }
 }
 
-// ── Extrair dados do webhook ──────────────────────────────────────────────────
+// ── Extrair dados do webhook Z-API ────────────────────────────────────────────
 function extrairDados(body) {
-  if (body.isGroupMsg === true || body.fromMe === true) return { telefone: '', mensagem: '', audioUrl: null };
+  // Ignorar mensagens de grupos e enviadas pelo bot
+  if (body.isGroupMsg === true || body.fromMe === true) {
+    return { telefone: '', mensagem: '', audioUrl: null };
+  }
+
+  // Normalizar telefone
   let phone = String(body.phone || body.from || '').replace(/\D/g, '').replace(/@.*$/, '');
   if (phone.length === 11) phone = '55' + phone;
   if (phone.length === 10) phone = '55' + phone;
+
+  // Extrair texto
   let mensagem = '';
-  if (body.text && typeof body.text === 'object') mensagem = String(body.text.message || '');
-  else mensagem = String(body.message || body.content || body.body || '');
-  let audioUrl = null;
-  // Z-API pode mandar áudio em body.audio, body.audioUrl, ou como type=AudioMessage
-  if (body.audio) audioUrl = body.audio.audioUrl || body.audio.url || null;
-  if (!audioUrl && body.audioUrl) audioUrl = body.audioUrl;
-  if (!audioUrl && body.type === 'AudioMessage' && body.audio) audioUrl = body.audio;
-  // Log completo quando áudio detectado
-  if (audioUrl) console.log('[AUDIO] URL detectada:', audioUrl);
-  if (!audioUrl && mensagem === '' && body.type === 'ReceivedCallback') {
-    // Tentar extrair URL de qualquer campo que contenha 'audio' ou 'media'
-    const bodyStr = JSON.stringify(body);
-    const audioMatch = bodyStr.match(/"(https?:[^"]*\.(?:ogg|mp3|mp4|wav|opus|m4a|aac)[^"]*)"/i);
-    if (audioMatch) { audioUrl = audioMatch[1]; console.log('[AUDIO] URL extraída do body:', audioUrl); }
+  if (body.text && typeof body.text === 'object') {
+    mensagem = String(body.text.message || '');
+  } else {
+    mensagem = String(body.message || body.content || body.body || '');
   }
-  console.log('[EXTRACT]', { phone, mensagem: mensagem.substring(0,50), audioUrl: audioUrl ? 'SIM' : 'NAO', type: body.type });
+
+  // Extrair URL de áudio
+  let audioUrl = body.audio?.audioUrl || body.audio?.url || body.audioUrl || null;
+  if (!audioUrl && body.type === 'AudioMessage' && body.audio) audioUrl = body.audio;
+  if (!audioUrl && mensagem === '' && body.type === 'ReceivedCallback') {
+    const match = JSON.stringify(body).match(/"(https?:[^"]*\.(?:ogg|mp3|mp4|wav|opus|m4a|aac)[^"]*)"/i);
+    if (match) audioUrl = match[1];
+  }
+
+  if (audioUrl) console.log('[AUDIO] URL detectada:', audioUrl);
+  console.log('[EXTRACT]', { phone, mensagem: mensagem.substring(0, 50), audioUrl: !!audioUrl, type: body.type });
+
   return { telefone: phone, mensagem, audioUrl };
 }
 
-// ── Classificação de intenção por linguagem natural ───────────────────────────
+// ── Classificação de intenção ─────────────────────────────────────────────────
 function classificarIntencao(msg) {
   const m = msg.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  if (m.match(/boleto|fatura|pagar|pagamento|pix|segunda via|vencimento|debito|cobranca|conta/)) return 'boleto';
-  if (m.match(/sem internet|sem sinal|caiu|lento|travando|sem conexao|fibra|rompimento|nao funciona|parou|reinici|modem|roteador|luz vermelha|luz piscando|vermelho|offline|caiu a net|net caiu|sem net|sem wifi|wifi|signal/)) return 'suporte';
-  if (m.match(/cancelar|cancelamento|quero cancelar|desistir|nao quero mais/)) return 'cancelamento';
-  if (m.match(/falar com|atendente|humano|pessoa|responsavel|gerente|contrato|plano|instalar|instalacao|mudanca|mudei|novo cliente|quero assinar|quero contratar/)) return 'atendente';
+  if (m.match(/boleto|fatura|pagar|pagamento|pix|segunda via|vencimento|debito|cobranca|conta/))
+    return 'boleto';
+  if (m.match(/sem internet|sem sinal|caiu|lento|travando|sem conexao|fibra|rompimento|nao funciona|parou|reinici|modem|roteador|luz vermelha|luz piscando|vermelho|offline|caiu a net|net caiu|sem net|sem wifi|wifi|signal/))
+    return 'suporte';
+  if (m.match(/cancelar|cancelamento|quero cancelar|desistir|nao quero mais/))
+    return 'cancelamento';
+  if (m.match(/falar com|atendente|humano|pessoa|responsavel|gerente|contrato|plano|instalar|instalacao|mudanca|mudei|novo cliente|quero assinar|quero contratar/))
+    return 'atendente';
   return 'outro';
 }
 
-// ── Verificar horário do atendente ────────────────────────────────────────────
+// ── Utilitários ───────────────────────────────────────────────────────────────
+function primeiroNome(nomeCompleto) {
+  return (nomeCompleto || 'cliente').split(' ')[0];
+}
+
 function atendenteDisponivel() {
   const horaBR = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
-  const dia = horaBR.getDay(); // 0=dom, 6=sab
+  const dia  = horaBR.getDay();
   const hora = horaBR.getHours();
   return dia >= 1 && dia <= 5 && hora >= 9 && hora < 20;
 }
@@ -182,320 +168,346 @@ function horaAtual() {
   return new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
 }
 
-// ── Alerta para o Rafa ────────────────────────────────────────────────────────
 async function alertarRafa(emoji, titulo, nome, telefone, extra) {
-  const hora = horaAtual();
-  await enviarMensagem(RAFA_PHONE, `${emoji} *${titulo}*\n\n⏰ ${hora}\n👤 Cliente: *${nome}*\n📞 Fone: ${telefone.replace('55', '')}\n${extra}`);
+  const msg = `${emoji} *${titulo}*\n\n⏰ ${horaAtual()}\n👤 Cliente: *${nome}*\n📞 Fone: ${telefone.replace(/^55/, '')}\n${extra}`;
+  await enviarMensagem(RAFA_PHONE, msg);
 }
 
+function registrarAtendimento(telefone, nomeCompleto, idCliente, motivo, mensagem, estado, resolvido) {
+  return dbCreate('Atendimento', {
+    telefone,
+    nome_cliente: nomeCompleto,
+    id_cliente_receitanet: idCliente,
+    motivo,
+    mensagem_original: mensagem,
+    estado_final: estado,
+    data_atendimento: new Date().toISOString(),
+    resolvido
+  });
+}
+
+// ── Endpoints de saúde ────────────────────────────────────────────────────────
+app.get('/', (_req, res) => res.send('PSIU TELECOM Webhook - OK'));
+app.get('/webhook', (_req, res) => res.send('PSIU TELECOM Webhook - OK'));
+
 // ── Webhook principal ─────────────────────────────────────────────────────────
-// ── Endpoint para atualizar o token dinamicamente ────────────────────────────
-app.post('/update-token', (req, res) => {
-  const { token, secret } = req.body;
-  if (secret !== REFRESH_SECRET) return res.status(403).json({ error: 'Unauthorized' });
-  if (!token) return res.status(400).json({ error: 'Token required' });
-  BASE44_SERVICE_TOKEN_DYNAMIC = token;
-  console.log('[TOKEN] Token atualizado às', new Date().toISOString());
-  res.json({ ok: true });
-});
-
-app.get('/', (req, res) => res.send('PSIU TELECOM Webhook - OK'));
-app.get('/webhook', (req, res) => res.send('PSIU TELECOM Webhook - OK'));
-
 app.post('/webhook', async (req, res) => {
+  // Responde imediatamente ao Z-API para evitar retentativas
+  res.json({ ok: true });
+
   try {
-    const body = req.body;
-    console.log('Webhook:', JSON.stringify(body).substring(0, 2000));
+    const { telefone, mensagem: mensagemTexto, audioUrl } = extrairDados(req.body);
 
-    const { telefone, mensagem: mensagemTexto, audioUrl } = extrairDados(body);
-
-    // Transcrever áudio
+    // Transcrever áudio (se houver)
     let mensagemRecebida = mensagemTexto;
     if (audioUrl && !mensagemTexto) {
       const transcricao = await transcreverAudio(audioUrl);
       if (transcricao) {
         mensagemRecebida = transcricao;
-        console.log('Transcrição:', transcricao);
+        console.log('[AUDIO] Transcrição:', transcricao);
       } else {
-        if (telefone) await enviarMensagem(telefone, `Recebi seu áudio mas não consegui entender. Pode digitar sua mensagem? 😊`);
-        return res.json({ ok: true });
+        await enviarMensagem(telefone, `Recebi seu áudio mas não consegui entender. Pode digitar sua mensagem? 😊`);
+        return;
       }
     }
 
-    if (!telefone || !mensagemRecebida) return res.json({ ok: true });
+    if (!telefone || !mensagemRecebida) return;
 
     console.log('[WEBHOOK]', { telefone, msg: mensagemRecebida.substring(0, 100) });
 
-    // Buscar cliente no banco
-    let clientesLocal = await dbFilter('ClienteWhatsapp', { telefone });
-    if (!Array.isArray(clientesLocal) || clientesLocal.length === 0) {
+    // ── Buscar cliente no banco ───────────────────────────────────────────────
+    let lista = await dbFilter('ClienteWhatsapp', { telefone });
+
+    // Tentar sem prefixo 55 se não achou
+    if (!Array.isArray(lista) || lista.length === 0) {
       const telSem55 = telefone.startsWith('55') ? telefone.slice(2) : telefone;
-      clientesLocal = await dbFilter('ClienteWhatsapp', { telefone: telSem55 });
-      if (Array.isArray(clientesLocal) && clientesLocal.length > 0) {
-        await dbUpdate('ClienteWhatsapp', clientesLocal[0].id, { telefone });
+      lista = await dbFilter('ClienteWhatsapp', { telefone: telSem55 });
+      if (Array.isArray(lista) && lista.length > 0) {
+        await dbUpdate('ClienteWhatsapp', lista[0].id, { telefone }); // Normalizar telefone
       }
     }
-    let clienteLocal = Array.isArray(clientesLocal) && clientesLocal.length > 0 ? clientesLocal[0] : null;
+
+    let cliente = Array.isArray(lista) && lista.length > 0 ? lista[0] : null;
+
+    // ── Correção automática de estado inconsistente ───────────────────────────
+    // Se cliente já tem ID no Receitanet mas estado ficou travado, corrige
+    if (cliente?.id_cliente_receitanet && !cliente.identificado) {
+      await dbUpdate('ClienteWhatsapp', cliente.id, { identificado: true, estado_conversa: 'identificado' });
+      cliente = { ...cliente, identificado: true, estado_conversa: 'identificado' };
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // BLOCO 1 — CLIENTE NÃO IDENTIFICADO
     // ═══════════════════════════════════════════════════════════════════════════
-    // Proteção: se cliente tem id_cliente_receitanet OU identificado=true, nunca resetar para fluxo de identificação
-    if (clienteLocal && clienteLocal.id_cliente_receitanet && clienteLocal.estado_conversa === 'aguardando_eh_cliente') {
-      await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'identificado', identificado: true });
-      clienteLocal.estado_conversa = 'identificado';
-      clienteLocal.identificado = true;
-    }
-
-    if (!clienteLocal || (!clienteLocal.identificado && !(clienteLocal.id_cliente_receitanet))) {
-
-      // Tentar identificar pelo telefone automaticamente
-      const resultadoBusca = await buscarClientePorTelefone(telefone);
-      if (resultadoBusca.success && resultadoBusca.contratos && resultadoBusca.contratos.idCliente) {
-        // Encontrou — salvar e continuar para o fluxo principal
-        const dadosCliente = {
-          telefone,
-          id_cliente_receitanet: String(resultadoBusca.contratos.idCliente),
-          nome: resultadoBusca.contratos.razaoSocial || '',
-          cpf_cnpj: resultadoBusca.contratos.cpfCnpj || '',
-          identificado: true,
-          ultimo_contato: new Date().toISOString(),
-          estado_conversa: 'identificado'
-        };
-        if (clienteLocal) {
-          await dbUpdate('ClienteWhatsapp', clienteLocal.id, dadosCliente);
-          clienteLocal = { ...clienteLocal, ...dadosCliente };
-        } else {
-          clienteLocal = await dbCreate('ClienteWhatsapp', dadosCliente);
-        }
-        // Vai direto para o processamento natural abaixo
-      } else {
-        // Não encontrou pelo telefone — verificar estado da conversa
-        const estado = clienteLocal ? clienteLocal.estado_conversa : null;
-
-        // Estado: aguardando resposta se é cliente (sim/nao)
-        if (estado === 'aguardando_eh_cliente') {
-          const resp = mensagemRecebida.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-          const ehSim = resp.match(/^(sim|s|yes|sou|ja|já|cliente|sou cliente|claro|confirmo)/);
-          const ehNao = resp.match(/^(nao|n|no|não|novo|quero ser|quero contratar|me tornar)/);
-
-          if (ehSim) {
-            // É cliente — pedir CPF
-            await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'aguardando_cpf' });
-            await enviarMensagem(telefone, `Tudo bem! Me informa seu *CPF ou CNPJ* pra eu localizar seu cadastro 😊`);
-          } else if (ehNao) {
-            // Novo cliente — encaminhar para atendente
-            await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'atendente_novo_cliente' });
-            await dbCreate('Atendimento', { telefone, nome_cliente: 'Novo Cliente', motivo: 'novo_cliente', mensagem_original: mensagemRecebida, estado_final: 'encaminhado_atendente', data_atendimento: new Date().toISOString(), resolvido: false });
-            if (atendenteDisponivel()) {
-              await enviarMensagem(telefone, `Que ótimo, seja bem-vindo(a)! 🎉\n\nVou te conectar com nosso time de vendas agora. Um atendente entrará em contato em breve!`);
-            } else {
-              await enviarMensagem(telefone, `Que ótimo, seja bem-vindo(a)! 🎉\n\nNosso horário de atendimento é *seg-sex das 9h às 20h*. Assim que nossa equipe chegar, um atendente entrará em contato para te apresentar nossos planos! 😊`);
-            }
-            await alertarRafa('🆕', 'NOVO CLIENTE INTERESSADO', 'Novo Cliente', telefone, `📲 Quer contratar a PSIU! Entre em contato.`);
-          } else {
-            // Resposta não entendida
-            await enviarMensagem(telefone, `Desculpe, não entendi. Você já é *cliente da PSIU*?\n\nResponda *sim* ou *não* 😊`);
-          }
-          return res.json({ ok: true });
-        }
-
-        // Estado: aguardando CPF
-        if (estado === 'aguardando_cpf') {
-          const cpfLimpo = mensagemRecebida.replace(/\D/g, '');
-          if (cpfLimpo.length >= 11) {
-            const resultadoCpf = await buscarClientePorCpf(cpfLimpo);
-            if (resultadoCpf.success && resultadoCpf.contratos && resultadoCpf.contratos.idCliente) {
-              const dadosCpf = {
-                telefone,
-                id_cliente_receitanet: String(resultadoCpf.contratos.idCliente),
-                nome: resultadoCpf.contratos.razaoSocial || '',
-                cpf_cnpj: cpfLimpo,
-                identificado: true,
-                ultimo_contato: new Date().toISOString(),
-                estado_conversa: 'identificado'
-              };
-              await dbUpdate('ClienteWhatsapp', clienteLocal.id, dadosCpf);
-              clienteLocal = { ...clienteLocal, ...dadosCpf };
-              // Vai direto para processamento
-            } else {
-              await enviarMensagem(telefone, `Hmm, não encontrei nenhum cadastro com esse CPF. 😕\n\nVerifica se digitou certo ou fala com nosso time: *(19) 3167-2161*`);
-              return res.json({ ok: true });
-            }
-          } else {
-            await enviarMensagem(telefone, `Me passa o *CPF ou CNPJ* (só os números) pra eu localizar seu cadastro 😊`);
-            return res.json({ ok: true });
-          }
-        } else {
-          // Primeiro contato (clienteLocal não existe) ou estado inválido
-          if (!clienteLocal) {
-            // Realmente primeiro contato — criar registro e perguntar
-            await dbCreate('ClienteWhatsapp', {
-              telefone, identificado: false, ultimo_contato: new Date().toISOString(), estado_conversa: 'aguardando_eh_cliente'
-            });
-            await enviarMensagem(telefone, `Olá! 👋 Bem-vindo(a) à *PSIU TELECOM*!\n\nVocê já é nosso cliente?`);
-          } else {
-            // Cliente existe mas estado é desconhecido — resetar para aguardar resposta
-            await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'aguardando_eh_cliente', ultimo_contato: new Date().toISOString() });
-            await enviarMensagem(telefone, `Olá! 👋 Bem-vindo(a) à *PSIU TELECOM*!\n\nVocê já é nosso cliente?`);
-          }
-          return res.json({ ok: true });
-        }
-      }
+    if (!cliente?.identificado) {
+      await handleNaoIdentificado(cliente, telefone, mensagemRecebida);
+      return;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // BLOCO 2 — CLIENTE IDENTIFICADO — PROCESSAMENTO NATURAL
+    // BLOCO 2 — CLIENTE IDENTIFICADO
     // ═══════════════════════════════════════════════════════════════════════════
-    await dbUpdate('ClienteWhatsapp', clienteLocal.id, { ultimo_contato: new Date().toISOString() });
-
-    const idCliente = clienteLocal.id_cliente_receitanet;
-    const nome = (clienteLocal.nome || 'cliente').split(' ')[0];
-    const nomeCompleto = clienteLocal.nome || 'cliente';
-    const intencao = classificarIntencao(mensagemRecebida);
-
-    console.log('[INTENCAO]', intencao, '| estado:', clienteLocal.estado_conversa);
-
-    // ── Detectar massiva (múltiplos chamados de suporte em pouco tempo) ───────
-    if (intencao === 'suporte') {
-      const trintaMinAtras = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-      const chamadosRecentes = await dbFilter('Atendimento', { motivo: 'suporte' });
-      const qtd = Array.isArray(chamadosRecentes) ? chamadosRecentes.filter(c => c.data_atendimento > trintaMinAtras).length : 0;
-      if (qtd >= 3) {
-        await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'massiva' });
-        await dbCreate('Atendimento', { telefone, nome_cliente: nomeCompleto, id_cliente_receitanet: idCliente, motivo: 'suporte', mensagem_original: mensagemRecebida, estado_final: 'massiva', data_atendimento: new Date().toISOString(), resolvido: false });
-        await enviarMensagem(telefone, `Oi, *${nome}*! 😔 Identificamos uma instabilidade na rede que pode estar afetando sua região.\n\nNossa equipe já foi acionada e está trabalhando na resolução.\n\n⏱️ *Previsão: até 5 horas* — te avisamos assim que normalizar. Pedimos desculpas! 🙏`);
-        if (qtd === 3) await alertarRafa('🚨🚨🚨', 'MASSIVA DETECTADA!', nomeCompleto, telefone, `👥 Clientes afetados: *${qtd + 1}*\n\nVários clientes estão sem internet! Verifique o roteador/fibra com URGÊNCIA.\n⚡ Clientes já sendo avisados automaticamente.`);
-        return res.json({ ok: true });
-      }
-    }
-
-    // ── BOLETO ────────────────────────────────────────────────────────────────
-    if (intencao === 'boleto') {
-      await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'identificado' });
-      await dbCreate('Atendimento', { telefone, nome_cliente: nomeCompleto, id_cliente_receitanet: idCliente, motivo: 'boleto', mensagem_original: mensagemRecebida, estado_final: 'resolvido', data_atendimento: new Date().toISOString(), resolvido: true });
-
-      // Buscar dados atualizados do cliente via API (já inclui faturasEmAberto)
-      const cpfCliente = clienteLocal.cpf_cnpj ? clienteLocal.cpf_cnpj.replace(/\D/g, '') : null;
-      const dadosCliente = cpfCliente
-        ? await buscarClientePorCpf(cpfCliente)
-        : await buscarClientePorTelefone(telefone);
-
-      console.log('[BOLETO] Dados cliente:', JSON.stringify(dadosCliente).substring(0, 400));
-
-      const faturas = dadosCliente?.contratos?.faturasEmAberto;
-      if (dadosCliente.success && faturas && faturas.length > 0) {
-        let msg = `Olá, *${nome}*! Aqui estão suas faturas em aberto:\n\n`;
-        for (const f of faturas.slice(0, 3)) {
-          const dataVenc = f.vencimento ? new Date(f.vencimento + 'T12:00:00').toLocaleDateString('pt-BR') : '—';
-          msg += `📅 *Vencimento:* ${dataVenc}\n💰 *Valor:* R$ ${parseFloat(f.valor).toFixed(2).replace('.', ',')}\n`;
-          if (f.url) msg += `\n🔗 *Link do Boleto:*\n${f.url}\n`;
-          if (f.urlPixCopiaCola) msg += `\n💳 *PIX Copia e Cola:*\n${f.urlPixCopiaCola}\n`;
-          if (f.urlBoletoCopiaCola) msg += `\n🔢 *Linha Digitável:*\n${f.urlBoletoCopiaCola}\n`;
-          msg += '\n';
-        }
-        await enviarMensagem(telefone, msg.trim());
-      } else if (dadosCliente.success) {
-        await enviarMensagem(telefone, `Boa notícia, *${nome}*! ✅ Não há nenhuma fatura em aberto na sua conta. Tudo em dia!`);
-      } else {
-        await enviarMensagem(telefone, `*${nome}*, não consegui carregar sua fatura agora. Tenta novamente em alguns minutos ou fala com nosso time: *(19) 3167-2161* 😊`);
-      }
-      return res.json({ ok: true });
-    }
-
-    // ── SUPORTE TÉCNICO ───────────────────────────────────────────────────────
-    if (intencao === 'suporte') {
-      // Verificar equipamento
-      const dadosEquip = await verificarEquipamento(idCliente);
-      const equipOnline = dadosEquip.success && dadosEquip.contratos && !dadosEquip.contratos.servidor?.isManutencao;
-      const luzVermelha = mensagemRecebida.toLowerCase().match(/luz vermelha|vermelho|piscando/);
-
-      if (luzVermelha) {
-        // Falha física na fibra
-        const chamado = await abrirChamado(idCliente, telefone);
-        await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'chamado_aberto' });
-        await dbCreate('Atendimento', { telefone, nome_cliente: nomeCompleto, id_cliente_receitanet: idCliente, motivo: 'suporte_campo', mensagem_original: mensagemRecebida, estado_final: 'chamado_aberto', data_atendimento: new Date().toISOString(), resolvido: false });
-        await enviarMensagem(telefone, `*${nome}*, luz vermelha indica um problema na fibra que precisamos verificar presencialmente. 🔴\n\nJá abri um chamado técnico para visita! Nossa equipe entrará em contato em breve para agendar.\n\n📋 Protocolo: ${chamado.protocolo || chamado.idSuporte || 'gerado'}`);
-        await alertarRafa('🔴', 'CHAMADO DE CAMPO', nomeCompleto, telefone, `⚠️ Luz vermelha piscando — falha na fibra!\n📋 Protocolo: ${chamado.protocolo || chamado.idSuporte || 'gerado'}`);
-      } else if (equipOnline) {
-        // Equipamento online mas cliente sem internet
-        const chamado = await abrirChamado(idCliente, telefone);
-        await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'chamado_aberto' });
-        await dbCreate('Atendimento', { telefone, nome_cliente: nomeCompleto, id_cliente_receitanet: idCliente, motivo: 'suporte', mensagem_original: mensagemRecebida, estado_final: 'chamado_aberto', data_atendimento: new Date().toISOString(), resolvido: false });
-        await enviarMensagem(telefone, `*${nome}*, verifiquei aqui e seu equipamento aparece online no nosso sistema. Pode ser uma instabilidade momentânea. 🔄\n\nTenta reiniciar o roteador: *desliga da tomada por 30 segundos e liga novamente.*\n\nSe não resolver, já abri um chamado técnico (protocolo: ${chamado.protocolo || chamado.idSuporte || 'gerado'}). Nossa equipe vai verificar remotamente! 🔧`);
-        await alertarRafa('🟡', 'CHAMADO TÉCNICO', nomeCompleto, telefone, `Equipamento aparece *online* mas cliente sem internet.\n📋 Protocolo: ${chamado.protocolo || chamado.idSuporte || 'gerado'}`);
-      } else {
-        // Equipamento offline
-        const chamado = await abrirChamado(idCliente, telefone);
-        await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'chamado_aberto' });
-        await dbCreate('Atendimento', { telefone, nome_cliente: nomeCompleto, id_cliente_receitanet: idCliente, motivo: 'suporte', mensagem_original: mensagemRecebida, estado_final: 'chamado_aberto', data_atendimento: new Date().toISOString(), resolvido: false });
-        await enviarMensagem(telefone, `*${nome}*, verifiquei e seu equipamento está aparecendo *offline* no nosso sistema. 📡\n\nPrimeiro, tenta reiniciar: *desliga o roteador da tomada por 30 segundos e liga de novo.*\n\nJá abri um chamado técnico (protocolo: ${chamado.protocolo || chamado.idSuporte || 'gerado'}). Se não resolver após reiniciar, nossa equipe entra em contato! 🔧`);
-        await alertarRafa('🔴', 'CHAMADO DE CAMPO', nomeCompleto, telefone, `Equipamento *offline*.\n📋 Protocolo: ${chamado.protocolo || chamado.idSuporte || 'gerado'}`);
-      }
-      return res.json({ ok: true });
-    }
-
-    // ── CANCELAMENTO ──────────────────────────────────────────────────────────
-    if (intencao === 'cancelamento' && clienteLocal.estado_conversa !== 'cancelamento_retencao') {
-      await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'cancelamento_retencao' });
-      await dbCreate('Atendimento', { telefone, nome_cliente: nomeCompleto, id_cliente_receitanet: idCliente, motivo: 'cancelamento', mensagem_original: mensagemRecebida, estado_final: 'em_andamento', data_atendimento: new Date().toISOString(), resolvido: false });
-      await enviarMensagem(telefone, `*${nome}*, ficamos tristes em saber disso. 😔\n\nAntes de tomar essa decisão, qual o motivo? Às vezes conseguimos resolver!\n\n💰 Valor\n🔧 Problema técnico\n📦 Mudança de endereço\n💬 Outro motivo\n\nMe conta que vejo o que posso fazer por você 😊`);
-      await alertarRafa('⚠️', 'SOLICITAÇÃO DE CANCELAMENTO', nomeCompleto, telefone, `O bot está tentando reter. Acompanhe!`);
-      return res.json({ ok: true });
-    }
-
-    if (clienteLocal.estado_conversa === 'cancelamento_retencao') {
-      const msg = mensagemRecebida.toLowerCase();
-      let msgRetencao = '';
-      if (msg.match(/valor|caro|preco|preço|dinheiro|financeiro/)) {
-        msgRetencao = `Entendo, *${nome}*! 💙 Temos algumas opções:\n\n🎁 *Carência especial* — pausar sua conta por até 30 dias\n💳 *Renegociação* — parcelar débitos\n📦 *Ajuste de plano* — planos mais acessíveis\n\nUm atendente vai entrar em contato para te apresentar as opções. Aguarda? 😊`;
-      } else if (msg.match(/tecnico|internet|sinal|lento|problema|nao funciona/)) {
-        msgRetencao = `*${nome}*, se o motivo é técnico, a gente quer resolver! 🔧\n\nAbri um chamado prioritário para nossa equipe entrar em contato hoje. Não precisa cancelar por isso!\n\nAguarda que um técnico vai te chamar em breve 😊`;
-      } else if (msg.match(/mudanca|mudança|mudei|endereço|endereco|outra cidade/)) {
-        msgRetencao = `*${nome}*, dependendo do novo endereço conseguimos levar a PSIU até você! 🏠\n\nUm atendente vai verificar se temos cobertura na nova região e te contata. Tudo bem? 😊`;
-      } else {
-        msgRetencao = `Entendido, *${nome}*! Vou passar para um atendente que pode conversar melhor sobre sua situação.\n\nAguarda, alguém entra em contato em breve! 🙏`;
-      }
-      await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'atendente' });
-      await enviarMensagem(telefone, msgRetencao);
-      return res.json({ ok: true });
-    }
-
-    // ── ATENDENTE ─────────────────────────────────────────────────────────────
-    if (intencao === 'atendente') {
-      await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'atendente' });
-      await dbCreate('Atendimento', { telefone, nome_cliente: nomeCompleto, id_cliente_receitanet: idCliente, motivo: 'atendente', mensagem_original: mensagemRecebida, estado_final: 'encaminhado_atendente', data_atendimento: new Date().toISOString(), resolvido: false });
-      if (atendenteDisponivel()) {
-        await enviarMensagem(telefone, `*${nome}*, vou te transferir para um atendente agora! 👤\n\nAguarda um momento que alguém entra em contato em breve 😊`);
-      } else {
-        await enviarMensagem(telefone, `*${nome}*, registrei sua solicitação! 📋\n\nNosso horário de atendimento humano é *seg-sex das 9h às 20h*. Assim que nossa equipe chegar, entraremos em contato com você 😊`);
-      }
-      await alertarRafa('👤', 'CLIENTE QUER ATENDENTE', nomeCompleto, telefone, `Solicitou atendimento humano.`);
-      return res.json({ ok: true });
-    }
-
-    // ── Estado: aguardando resposta do suporte (reiniciou?) ───────────────────
-    if (clienteLocal.estado_conversa === 'chamado_aberto') {
-      const msg = mensagemRecebida.toLowerCase();
-      if (msg.match(/funcionou|resolveu|voltou|ta ok|tá ok|ok|certo|funcionando|obrigad/)) {
-        await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'identificado' });
-        await enviarMensagem(telefone, `Ótimo, *${nome}*! Fico feliz que resolveu! 😄\n\nSe precisar de mais alguma coisa, é só falar. Estou aqui! 🙌`);
-      } else {
-        await enviarMensagem(telefone, `Entendi, *${nome}*. Nossa equipe técnica já está ciente e vai entrar em contato em breve! 🔧\n\nSe quiser falar com um atendente agora, é só me dizer 😊`);
-      }
-      return res.json({ ok: true });
-    }
-
-    // ── Resposta padrão / saudação ────────────────────────────────────────────
-    await dbUpdate('ClienteWhatsapp', clienteLocal.id, { estado_conversa: 'identificado' });
-    await enviarMensagem(telefone, `Oi, *${nome}*! 😊 Como posso te ajudar hoje?\n\nPode me dizer o que precisa — *boleto*, *problema com internet*, ou qualquer outra dúvida!`);
-    return res.json({ ok: true });
+    await dbUpdate('ClienteWhatsapp', cliente.id, { ultimo_contato: new Date().toISOString() });
+    await handleIdentificado(cliente, telefone, mensagemRecebida);
 
   } catch (err) {
-    console.error('ERRO no webhook:', err);
-    res.status(500).json({ error: err.message });
+    console.error('[WEBHOOK] Erro:', err.message, err.stack);
   }
 });
 
+// ── Fluxo: cliente não identificado ──────────────────────────────────────────
+async function handleNaoIdentificado(cliente, telefone, mensagem) {
+  // Tentar identificar automaticamente pelo telefone
+  const resultado = await buscarClientePorTelefone(telefone);
+  if (resultado.success && resultado.contratos?.idCliente) {
+    const dados = {
+      telefone,
+      id_cliente_receitanet: String(resultado.contratos.idCliente),
+      nome: resultado.contratos.razaoSocial || '',
+      cpf_cnpj: resultado.contratos.cpfCnpj || '',
+      identificado: true,
+      ultimo_contato: new Date().toISOString(),
+      estado_conversa: 'identificado'
+    };
+    if (cliente) {
+      await dbUpdate('ClienteWhatsapp', cliente.id, dados);
+      cliente = { ...cliente, ...dados };
+    } else {
+      cliente = await dbCreate('ClienteWhatsapp', dados);
+    }
+    // Identificado — seguir para o fluxo principal
+    return handleIdentificado(cliente, telefone, mensagem);
+  }
+
+  // Não encontrou pelo telefone — analisar estado da conversa
+  const estado = cliente?.estado_conversa || null;
+
+  if (estado === 'aguardando_cpf') {
+    return handleAguardandoCpf(cliente, telefone, mensagem);
+  }
+
+  if (estado === 'aguardando_eh_cliente') {
+    return handleAguardandoEhCliente(cliente, telefone, mensagem);
+  }
+
+  // Primeiro contato ou estado desconhecido
+  if (!cliente) {
+    await dbCreate('ClienteWhatsapp', {
+      telefone, identificado: false,
+      ultimo_contato: new Date().toISOString(),
+      estado_conversa: 'aguardando_eh_cliente'
+    });
+  } else {
+    await dbUpdate('ClienteWhatsapp', cliente.id, {
+      estado_conversa: 'aguardando_eh_cliente',
+      ultimo_contato: new Date().toISOString()
+    });
+  }
+  await enviarMensagem(telefone, `Olá! 👋 Bem-vindo(a) à *PSIU TELECOM*!\n\nVocê já é nosso cliente?`);
+}
+
+async function handleAguardandoEhCliente(cliente, telefone, mensagem) {
+  const m = mensagem.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (m.match(/^(sim|s|yes|sou|ja|já|cliente|sou cliente|claro|confirmo)/)) {
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_cpf' });
+    await enviarMensagem(telefone, `Tudo bem! Me informa seu *CPF ou CNPJ* pra eu localizar seu cadastro 😊`);
+  } else if (m.match(/^(nao|n|no|não|novo|quero ser|quero contratar|me tornar)/)) {
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'atendente_novo_cliente' });
+    await registrarAtendimento(telefone, 'Novo Cliente', null, 'novo_cliente', mensagem, 'encaminhado_atendente', false);
+    const msgBV = atendenteDisponivel()
+      ? `Que ótimo, seja bem-vindo(a)! 🎉\n\nVou te conectar com nosso time de vendas agora. Um atendente entrará em contato em breve!`
+      : `Que ótimo, seja bem-vindo(a)! 🎉\n\nNosso horário de atendimento é *seg-sex das 9h às 20h*. Um atendente entrará em contato para te apresentar nossos planos! 😊`;
+    await enviarMensagem(telefone, msgBV);
+    await alertarRafa('🆕', 'NOVO CLIENTE INTERESSADO', 'Novo Cliente', telefone, `📲 Quer contratar a PSIU! Entre em contato.`);
+  } else {
+    await enviarMensagem(telefone, `Desculpe, não entendi. Você já é *cliente da PSIU*?\n\nResponda *sim* ou *não* 😊`);
+  }
+}
+
+async function handleAguardandoCpf(cliente, telefone, mensagem) {
+  const cpf = mensagem.replace(/\D/g, '');
+  if (cpf.length < 11) {
+    await enviarMensagem(telefone, `Me passa o *CPF ou CNPJ* (só os números) pra eu localizar seu cadastro 😊`);
+    return;
+  }
+  const resultado = await buscarClientePorCpf(cpf);
+  if (resultado.success && resultado.contratos?.idCliente) {
+    const dados = {
+      telefone,
+      id_cliente_receitanet: String(resultado.contratos.idCliente),
+      nome: resultado.contratos.razaoSocial || '',
+      cpf_cnpj: cpf,
+      identificado: true,
+      ultimo_contato: new Date().toISOString(),
+      estado_conversa: 'identificado'
+    };
+    await dbUpdate('ClienteWhatsapp', cliente.id, dados);
+    cliente = { ...cliente, ...dados };
+    return handleIdentificado(cliente, telefone, mensagem);
+  }
+  await enviarMensagem(telefone, `Hmm, não encontrei nenhum cadastro com esse CPF. 😕\n\nVerifica se digitou certo ou fala com nosso time: *(19) 3167-2161*`);
+}
+
+// ── Fluxo: cliente identificado ───────────────────────────────────────────────
+async function handleIdentificado(cliente, telefone, mensagem) {
+  const idCliente   = cliente.id_cliente_receitanet;
+  const nome        = primeiroNome(cliente.nome);
+  const nomeCompleto = cliente.nome || 'cliente';
+  const estado      = cliente.estado_conversa;
+  const intencao    = classificarIntencao(mensagem);
+
+  console.log('[INTENCAO]', intencao, '| estado:', estado);
+
+  // ── Verificar massiva ANTES de outros fluxos de suporte ──────────────────
+  if (intencao === 'suporte') {
+    const trintaMinAtras = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const todosChamados  = await dbFilter('Atendimento', { motivo: 'suporte' });
+    const recentes = Array.isArray(todosChamados)
+      ? todosChamados.filter(c => c.data_atendimento > trintaMinAtras).length
+      : 0;
+
+    if (recentes >= 3) {
+      await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'massiva' });
+      await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'massiva', false);
+      await enviarMensagem(telefone, `Oi, *${nome}*! 😔 Identificamos uma instabilidade na rede que pode estar afetando sua região.\n\nNossa equipe já foi acionada e está trabalhando na resolução.\n\n⏱️ *Previsão: até 5 horas* — te avisamos assim que normalizar. Pedimos desculpas! 🙏`);
+      if (recentes === 3) {
+        await alertarRafa('🚨🚨🚨', 'MASSIVA DETECTADA!', nomeCompleto, telefone, `👥 Clientes afetados: *${recentes + 1}*\n\nVários clientes estão sem internet! Verifique o roteador/fibra com URGÊNCIA.\n⚡ Clientes já sendo avisados automaticamente.`);
+      }
+      return;
+    }
+  }
+
+  // ── Estado: chamado aberto (aguardando feedback do cliente) ──────────────
+  if (estado === 'chamado_aberto' && intencao !== 'suporte' && intencao !== 'boleto') {
+    const m = mensagem.toLowerCase();
+    if (m.match(/funcionou|resolveu|voltou|ta ok|tá ok|ok|certo|funcionando|obrigad/)) {
+      await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+      await enviarMensagem(telefone, `Ótimo, *${nome}*! Fico feliz que resolveu! 😄\n\nSe precisar de mais alguma coisa, é só falar. Estou aqui! 🙌`);
+    } else {
+      await enviarMensagem(telefone, `Entendi, *${nome}*. Nossa equipe técnica já está ciente e vai entrar em contato em breve! 🔧\n\nSe quiser falar com um atendente, é só dizer.`);
+    }
+    return;
+  }
+
+  // ── Estado: retenção de cancelamento ─────────────────────────────────────
+  if (estado === 'cancelamento_retencao' && intencao !== 'boleto' && intencao !== 'suporte') {
+    return handleRetencao(cliente, telefone, mensagem, nome);
+  }
+
+  // ── Intenções principais ──────────────────────────────────────────────────
+  if (intencao === 'boleto')       return handleBoleto(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
+  if (intencao === 'suporte')      return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
+  if (intencao === 'cancelamento') return handleCancelamento(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
+  if (intencao === 'atendente')    return handleAtendente(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
+
+  // ── Mensagem não reconhecida ──────────────────────────────────────────────
+  await enviarMensagem(telefone, `Oi, *${nome}*! 😊 Como posso te ajudar?\n\n💰 *Boleto* — segunda via e PIX\n🔧 *Suporte* — problemas com internet\n👤 *Atendente* — falar com nossa equipe`);
+}
+
+// ── Handler: boleto ───────────────────────────────────────────────────────────
+async function handleBoleto(cliente, telefone, _mensagem, nome, nomeCompleto, idCliente) {
+  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+
+  // Buscar dados atualizados (faturas)
+  const cpf = cliente.cpf_cnpj ? cliente.cpf_cnpj.replace(/\D/g, '') : null;
+  const dados = cpf ? await buscarClientePorCpf(cpf) : await buscarClientePorTelefone(telefone);
+
+  console.log('[BOLETO] Resposta Receitanet:', JSON.stringify(dados).substring(0, 400));
+
+  const faturas = dados?.contratos?.faturasEmAberto;
+
+  if (!dados.success) {
+    await registrarAtendimento(telefone, nomeCompleto, idCliente, 'boleto', '', 'erro_api', false);
+    await enviarMensagem(telefone, `*${nome}*, não consegui carregar sua fatura agora. Tenta em alguns minutos ou fala com nosso time: *(19) 3167-2161* 😊`);
+    return;
+  }
+
+  if (!faturas || faturas.length === 0) {
+    await registrarAtendimento(telefone, nomeCompleto, idCliente, 'boleto', '', 'resolvido', true);
+    await enviarMensagem(telefone, `Boa notícia, *${nome}*! ✅ Não há nenhuma fatura em aberto. Tudo em dia!`);
+    return;
+  }
+
+  let msg = `Olá, *${nome}*! Aqui estão suas faturas em aberto:\n\n`;
+  for (const f of faturas.slice(0, 3)) {
+    const dataVenc = f.vencimento
+      ? new Date(f.vencimento + 'T12:00:00').toLocaleDateString('pt-BR')
+      : '—';
+    msg += `📅 *Vencimento:* ${dataVenc}\n💰 *Valor:* R$ ${parseFloat(f.valor).toFixed(2).replace('.', ',')}\n`;
+    if (f.url)               msg += `\n🔗 *Link do Boleto:*\n${f.url}\n`;
+    if (f.urlPixCopiaCola)   msg += `\n💳 *PIX Copia e Cola:*\n${f.urlPixCopiaCola}\n`;
+    if (f.urlBoletoCopiaCola) msg += `\n🔢 *Linha Digitável:*\n${f.urlBoletoCopiaCola}\n`;
+    msg += '\n';
+  }
+
+  await registrarAtendimento(telefone, nomeCompleto, idCliente, 'boleto', '', 'resolvido', true);
+  await enviarMensagem(telefone, msg.trim());
+}
+
+// ── Handler: suporte técnico ──────────────────────────────────────────────────
+async function handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente) {
+  const luzVermelha = mensagem.toLowerCase().match(/luz vermelha|vermelho|piscando/);
+
+  // Verificar status do equipamento
+  const dadosEquip = await buscarClientePorId(idCliente);
+  const equipOnline = dadosEquip.success && dadosEquip.contratos && !dadosEquip.contratos.servidor?.isManutencao;
+
+  const chamado = await abrirChamado(idCliente, telefone);
+  const protocolo = chamado.protocolo || chamado.idSuporte || 'gerado';
+
+  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'chamado_aberto' });
+  await registrarAtendimento(telefone, nomeCompleto, idCliente, luzVermelha ? 'suporte_campo' : 'suporte', mensagem, 'chamado_aberto', false);
+
+  if (luzVermelha) {
+    await enviarMensagem(telefone, `*${nome}*, luz vermelha indica um problema na fibra que precisamos verificar presencialmente. 🔴\n\nJá abri um chamado técnico para visita! Nossa equipe entrará em contato em breve.\n\n📋 Protocolo: ${protocolo}`);
+    await alertarRafa('🔴', 'CHAMADO DE CAMPO', nomeCompleto, telefone, `⚠️ Luz vermelha — falha na fibra!\n📋 Protocolo: ${protocolo}`);
+  } else if (equipOnline) {
+    await enviarMensagem(telefone, `*${nome}*, seu equipamento aparece *online* no nosso sistema. Pode ser instabilidade momentânea. 🔄\n\nTenta reiniciar o roteador: *desliga da tomada por 30 segundos e liga novamente.*\n\nJá abri um chamado (protocolo: ${protocolo}). Nossa equipe vai verificar remotamente! 🔧`);
+    await alertarRafa('🟡', 'CHAMADO TÉCNICO', nomeCompleto, telefone, `Equipamento *online* mas cliente sem internet.\n📋 Protocolo: ${protocolo}`);
+  } else {
+    await enviarMensagem(telefone, `*${nome}*, seu equipamento está *offline* no nosso sistema. 📡\n\nTenta reiniciar: *desliga o roteador da tomada por 30 segundos e liga novamente.*\n\nJá abri um chamado (protocolo: ${protocolo}). Se não resolver, nossa equipe entra em contato! 🔧`);
+    await alertarRafa('🔴', 'CHAMADO DE CAMPO', nomeCompleto, telefone, `Equipamento *offline*.\n📋 Protocolo: ${protocolo}`);
+  }
+}
+
+// ── Handler: cancelamento ─────────────────────────────────────────────────────
+async function handleCancelamento(cliente, telefone, mensagem, nome, nomeCompleto, idCliente) {
+  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'cancelamento_retencao' });
+  await registrarAtendimento(telefone, nomeCompleto, idCliente, 'cancelamento', mensagem, 'em_andamento', false);
+  await enviarMensagem(telefone, `*${nome}*, ficamos tristes em saber disso. 😔\n\nAntes de tomar essa decisão, qual o motivo? Às vezes conseguimos resolver!\n\n💰 Valor\n🔧 Problema técnico\n📦 Mudança de endereço\n💬 Outro motivo\n\nMe conta que vejo o que posso fazer por você 😊`);
+  await alertarRafa('⚠️', 'SOLICITAÇÃO DE CANCELAMENTO', nomeCompleto, telefone, `O bot está tentando reter. Acompanhe!`);
+}
+
+// ── Handler: retenção ─────────────────────────────────────────────────────────
+async function handleRetencao(cliente, telefone, mensagem, nome) {
+  const m = mensagem.toLowerCase();
+  let resposta = '';
+
+  if (m.match(/valor|caro|preco|preço|dinheiro|financeiro/)) {
+    resposta = `Entendo, *${nome}*! 💙 Temos algumas opções:\n\n🎁 *Carência especial* — pausar sua conta por até 30 dias\n💳 *Renegociação* — parcelar débitos\n📦 *Ajuste de plano* — planos mais acessíveis\n\nUm atendente vai entrar em contato para te apresentar as opções. Aguarda? 😊`;
+  } else if (m.match(/tecnico|internet|sinal|lento|problema|nao funciona/)) {
+    resposta = `*${nome}*, se o motivo é técnico, a gente quer resolver! 🔧\n\nAbri um chamado prioritário para nossa equipe entrar em contato hoje. Não precisa cancelar por isso!\n\nAguarda que um técnico vai te chamar em breve 😊`;
+  } else if (m.match(/mudanca|mudança|mudei|endereço|endereco|outra cidade/)) {
+    resposta = `*${nome}*, dependendo do novo endereço conseguimos levar a PSIU até você! 🏠\n\nUm atendente vai verificar se temos cobertura na nova região. Tudo bem? 😊`;
+  } else {
+    resposta = `Entendido, *${nome}*! Vou passar para um atendente que pode conversar melhor sobre sua situação.\n\nAguarda, alguém entra em contato em breve! 🙏`;
+  }
+
+  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'atendente' });
+  await enviarMensagem(telefone, resposta);
+}
+
+// ── Handler: encaminhar para atendente ────────────────────────────────────────
+async function handleAtendente(cliente, telefone, mensagem, nome, nomeCompleto, idCliente) {
+  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'atendente' });
+  await registrarAtendimento(telefone, nomeCompleto, idCliente, 'atendente', mensagem, 'encaminhado_atendente', false);
+  const msg = atendenteDisponivel()
+    ? `*${nome}*, vou te transferir para um atendente agora! 👤\n\nAguarda um momento 😊`
+    : `*${nome}*, registrei sua solicitação! 📋\n\nNosso horário de atendimento é *seg-sex das 9h às 20h*. Assim que nossa equipe chegar, entraremos em contato 😊`;
+  await enviarMensagem(telefone, msg);
+  await alertarRafa('👤', 'CLIENTE QUER ATENDENTE', nomeCompleto, telefone, `Solicitou atendimento humano.`);
+}
+
+// ── Start ─────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`PSIU Webhook rodando na porta ${PORT}`));
