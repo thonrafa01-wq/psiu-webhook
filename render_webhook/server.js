@@ -543,10 +543,21 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
 
   // ── Estado: chamado aberto — aguardando feedback ──────────────────────────
   if (estado === 'chamado_aberto' && intencao !== 'suporte' && intencao !== 'boleto') {
-    const m = mensagem.toLowerCase();
-    if (m.match(/funcionou|resolveu|voltou|ta ok|tá ok|ok|certo|funcionando|obrigad/)) {
+    const m = mensagem.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (m.match(/funcionou|resolveu|voltou|ta ok|ta ok|ok|certo|funcionando|obrigad/)) {
       await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
       await enviarMensagem(telefone, `Ótimo, *${nome}*! Fico feliz que resolveu! 😄\n\nSe precisar de mais alguma coisa, é só falar! 🙌`);
+    } else if (m.match(/verifica|verificar|conexao|online|offline|status|sinal|internet|minha net|minha conexao/)) {
+      // Cliente quer saber o status da conexão — consultar API em tempo real
+      const acesso = await verificarAcesso(idCliente, telefone);
+      const statusAcesso = acesso?.status;
+      if (statusAcesso === 1) {
+        await enviarMensagem(telefone, `*${nome}*, verifiquei agora: seu equipamento está *online* no nosso sistema! ✅\n\nSe ainda estiver sem internet, tenta reiniciar o roteador: desliga da tomada por 30 segundos e liga novamente. Nossa equipe também está acompanhando! 🔧`);
+      } else if (statusAcesso === 2) {
+        await enviarMensagem(telefone, `*${nome}*, seu equipamento ainda aparece *offline* no nosso sistema. 📡\n\nNossa equipe técnica já foi acionada e vai entrar em contato em breve! Se quiser falar com um atendente agora, é só dizer.`);
+      } else {
+        await enviarMensagem(telefone, `*${nome}*, não consegui verificar o status agora. Nossa equipe já está ciente e vai te contatar em breve! 🔧`);
+      }
     } else {
       await enviarMensagem(telefone, `Entendi, *${nome}*. Nossa equipe técnica já está ciente e vai entrar em contato em breve! 🔧\n\nSe quiser falar com um atendente, é só dizer.`);
     }
