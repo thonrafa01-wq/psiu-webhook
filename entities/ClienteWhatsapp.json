@@ -2,32 +2,28 @@
   "type": "object",
   "properties": {
     "telefone": {
-      "type": "string",
-      "description": "N\u00famero de telefone do WhatsApp (ex: 5519999999999)"
+      "type": "string"
     },
     "id_cliente_receitanet": {
-      "type": "string",
-      "description": "ID do cliente no Receitanet"
+      "type": "string"
     },
     "nome": {
-      "type": "string",
-      "description": "Nome do cliente"
+      "type": "string"
     },
     "cpf_cnpj": {
-      "type": "string",
-      "description": "CPF ou CNPJ do cliente"
+      "type": "string"
     },
     "identificado": {
-      "type": "boolean",
-      "description": "Se o cliente j\u00e1 foi identificado"
+      "type": "boolean"
     },
     "ultimo_contato": {
-      "type": "string",
-      "description": "Data/hora do \u00faltimo contato"
+      "type": "string"
     },
     "estado_conversa": {
-      "type": "string",
-      "description": "Estado atual da conversa (aguardando_cpf, identificado, aguardando_humano, etc)"
+      "type": "string"
+    },
+    "mensagem_original_pre_cpf": {
+      "type": "string"
     }
   },
   "required": [],
