@@ -626,7 +626,15 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
   const idCliente    = cliente.id_cliente_receitanet;
   const nome         = primeiroNome(cliente.nome);
   const nomeCompleto = cliente.nome || 'cliente';
-  const estado       = cliente.estado_conversa;
+  let estado         = cliente.estado_conversa;
+
+  // ── Normalizar estado residual: cliente identificado não deve estar em aguardando_cpf ──
+  if (estado === 'aguardando_cpf' && idCliente) {
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+    cliente = { ...cliente, estado_conversa: 'identificado' };
+    estado = 'identificado';
+    console.log('[ESTADO] Normalizado aguardando_cpf → identificado para', telefone);
+  }
 
   // ── MODO SILÊNCIO: cliente em atendimento humano — bot não interfere ────────
   if (estado === 'atendente' || estado === 'atendente_novo_cliente') {
