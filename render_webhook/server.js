@@ -356,8 +356,7 @@ app.post('/webhook', async (req, res) => {
           `Recebi seu comprovante, *${nomeImg}*! ✅\n\n` +
           `O processamento do pagamento segue estes prazos:\n\n` +
           `💳 *PIX:* reconhecimento em até *15 minutos* — sua internet volta automaticamente assim que compensar!\n` +
-          `🏦 *Boleto / código de barras:* compensação em até *1 dia útil* após o pagamento.\n\n` +
-          `Se passar o prazo e a internet não voltar, me avisa que verifico manualmente para você 😊`
+          `🏦 *Boleto / código de barras:* compensação em até *1 dia útil* após o pagamento.`
         );
         if (clienteImg?.id_cliente_receitanet) {
           await registrarAtendimento(telefone, clienteImg.nome || '', clienteImg.id_cliente_receitanet, 'comprovante_enviado', 'Cliente enviou foto de comprovante', 'resolvido', true);
