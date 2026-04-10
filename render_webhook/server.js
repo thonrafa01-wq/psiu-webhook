@@ -558,7 +558,8 @@ app.post('/webhook', async (req, res) => {
     cliente = await dbCreate('ClienteWhatsapp', {
       telefone, identificado: false,
       ultimo_contato: new Date().toISOString(),
-      estado_conversa: 'aguardando_cpf'
+      estado_conversa: 'aguardando_cpf',
+      mensagem_original_pre_cpf: mensagemRecebida
     });
     await handleIdentificacaoPorCpf(cliente, telefone, mensagemRecebida);
 
@@ -589,8 +590,10 @@ async function handleIdentificacaoPorCpf(cliente, telefone, mensagem) {
       };
       await dbUpdate('ClienteWhatsapp', cliente.id, dados);
       cliente = { ...cliente, ...dados };
-      // Identificado com sucesso — processar como cliente normal
-      await handleClienteIdentificado(cliente, telefone, mensagem);
+      // Identificado com sucesso — usar mensagem original se houver
+      const msgOriginal = cliente.mensagem_original_pre_cpf || mensagem;
+      console.log('[CPF] mensagem original recuperada:', msgOriginal.substring(0, 80));
+      await handleClienteIdentificado(cliente, telefone, msgOriginal);
       return;
     } else {
       await enviarMensagem(telefone, `Não encontrei cadastro com esse CPF/CNPJ. 😕\n\nVerifica se está correto. Se preferir, nossa equipe pode te ajudar por aqui mesmo!`);
