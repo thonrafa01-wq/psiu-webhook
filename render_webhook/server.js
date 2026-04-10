@@ -110,7 +110,52 @@ async function transcreverAudio(audioUrl) {
   }
 }
 
-// 3b. Classificador de intenção via Groq LLM
+// 3b. Analisar imagem com IA (OpenAI GPT-4o vision)
+async function analisarImagem(imageUrl) {
+  try {
+    console.log('[IMG] Analisando imagem:', imageUrl.substring(0, 100));
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+        messages: [{
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: `Você é um assistente técnico para uma empresa de internet de fibra óptica chamada PSIU Telecom.
+Analise esta imagem e classifique em UMA das categorias abaixo. Responda SOMENTE com um JSON válido.
+
+Categorias:
+- "comprovante_pagamento": comprovante de transferência, PIX, TED, DOC, recibo de pagamento, extrato bancário mostrando pagamento
+- "equipamento_problema": foto de roteador, modem, ONT, ONU, caixa de fibra com luz vermelha, equipamento com problema visível
+- "cabo_rompido": cabo de fibra óptica partido, rompido, danificado, no chão, caído, cabo na rua, poste com problema
+- "outro": qualquer outra coisa que não se encaixa acima
+
+Responda neste formato:
+{"tipo": "comprovante_pagamento", "descricao": "resumo do que viu na imagem em 1 frase"}`
+            },
+            { type: 'image_url', image_url: { url: imageUrl } }
+          ]
+        }],
+        temperature: 0,
+        max_tokens: 150
+      })
+    });
+    const data = await res.json();
+    const texto = data.choices?.[0]?.message?.content?.trim() || '{}';
+    console.log('[IMG] Resultado:', texto);
+    const match = texto.match(/\{[^}]+\}/);
+    if (match) return JSON.parse(match[0]);
+    return { tipo: 'outro', descricao: 'imagem não identificada' };
+  } catch (e) {
+    console.error('[IMG] Erro análise:', e.message);
+    return { tipo: 'outro', descricao: 'erro ao analisar' };
+  }
+}
+
+// 3c. Classificador de intenção via Groq LLM
 async function classificarIntencao(mensagem) {
   try {
     const prompt = `Você é um classificador de intenções para um provedor de internet chamado PSIU Telecom.
@@ -221,10 +266,21 @@ function extrairDados(body) {
     if (match) audioUrl = match[1];
   }
 
-  if (audioUrl) console.log('[AUDIO] URL detectada:', audioUrl);
-  console.log('[EXTRACT]', { phone, mensagem: mensagem.substring(0, 50), audioUrl: !!audioUrl, type: body.type });
+  // Capturar URL de imagem
+  let imageUrl = body.image?.imageUrl || body.image?.url || body.imageUrl || null;
+  if (!imageUrl && body.type === 'ImageMessage' && body.image) imageUrl = body.image.imageUrl || body.image.url || body.image;
+  if (!imageUrl && body.type === 'ReceivedCallback') {
+    const matchImg = JSON.stringify(body).match(/"(https?:[^"]*\.(?:jpg|jpeg|png|webp|gif)[^"]*)"/i);
+    if (matchImg) imageUrl = matchImg[1];
+  }
+  // Caption da imagem (texto junto com a foto)
+  const imageCaption = body.image?.caption || body.caption || '';
 
-  return { telefone: phone, mensagem, audioUrl, fromMe: isFromMe || false };
+  if (audioUrl) console.log('[AUDIO] URL detectada:', audioUrl);
+  if (imageUrl) console.log('[IMAGE] URL detectada:', imageUrl);
+  console.log('[EXTRACT]', { phone, mensagem: mensagem.substring(0, 50), audioUrl: !!audioUrl, imageUrl: !!imageUrl, type: body.type });
+
+  return { telefone: phone, mensagem, audioUrl, imageUrl, imageCaption, fromMe: isFromMe || false };
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -266,7 +322,7 @@ app.post('/webhook', async (req, res) => {
   res.json({ ok: true }); // Responde imediatamente ao Z-API
 
   try {
-    const { telefone, mensagem: mensagemTexto, audioUrl, fromMe } = extrairDados(req.body);
+    const { telefone, mensagem: mensagemTexto, audioUrl, imageUrl, imageCaption, fromMe } = extrairDados(req.body);
 
     // Transcrever áudio se necessário
     let mensagemRecebida = mensagemTexto;
@@ -278,6 +334,65 @@ app.post('/webhook', async (req, res) => {
       } else {
         await enviarMensagem(telefone, `Recebi seu áudio mas não consegui entender. Pode digitar sua mensagem? 😊`);
         return;
+      }
+    }
+
+    // Processar imagem se houver
+    if (imageUrl && !mensagemRecebida) {
+      // Buscar cliente para ter nome disponível
+      const clienteImg = await (async () => {
+        try {
+          const lista = await dbFilter('ClienteWhatsapp', { telefone });
+          return Array.isArray(lista) && lista.length > 0 ? lista[0] : null;
+        } catch { return null; }
+      })();
+      const nomeImg = clienteImg?.nome ? clienteImg.nome.split(' ')[0].charAt(0).toUpperCase() + clienteImg.nome.split(' ')[0].slice(1).toLowerCase() : 'cliente';
+
+      const analise = await analisarImagem(imageUrl);
+      console.log('[IMG] Tipo detectado:', analise.tipo, '| desc:', analise.descricao);
+
+      if (analise.tipo === 'comprovante_pagamento') {
+        await enviarMensagem(telefone,
+          `Recebi seu comprovante, *${nomeImg}*! ✅\n\n` +
+          `O processamento do pagamento segue estes prazos:\n\n` +
+          `💳 *PIX:* reconhecimento em até *15 minutos* — sua internet volta automaticamente assim que compensar!\n` +
+          `🏦 *Boleto / código de barras:* compensação em até *1 dia útil* após o pagamento.\n\n` +
+          `Se passar o prazo e a internet não voltar, me avisa que verifico manualmente para você 😊`
+        );
+        if (clienteImg?.id_cliente_receitanet) {
+          await registrarAtendimento(telefone, clienteImg.nome || '', clienteImg.id_cliente_receitanet, 'comprovante_enviado', 'Cliente enviou foto de comprovante', 'resolvido', true);
+        }
+        return;
+      }
+
+      if (analise.tipo === 'cabo_rompido') {
+        await enviarMensagem(telefone,
+          `Obrigado por nos avisar, *${nomeImg}*! 🙏\n\n` +
+          `Encaminhei *urgentemente* para nossa equipe técnica. Cabo rompido é prioridade máxima — nosso time irá até o local o mais rápido possível! 🚨\n\n` +
+          `Se souber a localização exata (rua, bairro, perto de qual número), pode me informar que ajuda muito! 📍`
+        );
+        await alertarRafa('🚨', 'CABO ROMPIDO REPORTADO', nomeImg, telefone, `Cliente enviou foto de cabo rompido/danificado na rua!\nVerificar localização e enviar técnico!\nDescrição: ${analise.descricao}`);
+        if (clienteImg?.id_cliente_receitanet) {
+          await registrarAtendimento(telefone, clienteImg.nome || '', clienteImg.id_cliente_receitanet, 'cabo_rompido', 'Cliente enviou foto de cabo rompido', 'em_andamento', false);
+        }
+        return;
+      }
+
+      if (analise.tipo === 'equipamento_problema') {
+        await enviarMensagem(telefone,
+          `Recebi a foto do seu equipamento, *${nomeImg}*! 📸\n\n` +
+          `Vou verificar o status da sua conexão agora... aguarda um instante! ⏳`
+        );
+        // Tratar como suporte técnico para verificar equipamento
+        mensagemRecebida = 'equipamento com problema luz vermelha';
+      } else {
+        // Imagem não reconhecida — tratar legenda ou pedir texto
+        if (imageCaption) {
+          mensagemRecebida = imageCaption;
+        } else {
+          await enviarMensagem(telefone, `Recebi sua imagem, *${nomeImg}*! 📸 Como posso te ajudar? Me conta o que precisa 😊`);
+          return;
+        }
       }
     }
 
