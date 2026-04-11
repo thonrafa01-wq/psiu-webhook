@@ -162,20 +162,26 @@ async function classificarIntencao(mensagem) {
 
 Analise a mensagem do cliente e responda SOMENTE com um JSON válido, sem explicações.
 
+REGRA PRINCIPAL: Classifique pela INTENÇÃO real, não por palavras soltas.
+
 Intenções possíveis:
-- "boleto": cliente quer segunda via, boleto, fatura ou PIX
-- "pagou": cliente diz que já pagou, efetuou pagamento, realizou pagamento, fez o pix, pagou hoje
-- "suporte": cliente relata problema ATUAL com internet, sem sinal, lento, caiu, equipamento, luz vermelha
-- "resolvido": cliente diz que o problema foi resolvido, voltou, funcionou, conexão voltou, está ok agora
-- "verificar_conexao": cliente quer saber o status da conexão, pede pra verificar se está online
+- "duvida": cliente quer entender algo, fazer uma pergunta geral (ex: "como funciona fibra", "o que é ONU", "quais planos vocês têm", "qual a velocidade")
+- "comercial": cliente quer contratar, instalar, conhecer preços, mudar de plano, indicar alguém (ex: "quero assinar", "quanto custa", "tem plano de 200mb")
+- "boleto": cliente quer segunda via, boleto, fatura, PIX para pagar (ex: "preciso do boleto", "manda minha fatura", "quero pagar")
+- "pagou": cliente diz que JÁ pagou (ex: "já paguei", "fiz o pix", "efetuei pagamento")
+- "suporte": cliente relata problema ATUAL com internet (ex: "sem internet", "caiu", "lento", "luz vermelha", "sem sinal")
+- "resolvido": cliente diz que o problema foi resolvido (ex: "voltou", "funcionou", "tá ok")
+- "verificar_conexao": cliente quer saber o status da conexão dele (ex: "tô online?", "verifica minha conexão")
 - "cancelamento": cliente quer cancelar o serviço
-- "atendente": cliente quer falar com humano, contratar novo plano, instalar, mudança de endereço
-- "outro": qualquer outra coisa
+- "atendente": cliente quer falar com humano explicitamente (ex: "quero falar com atendente", "me passa pra um humano")
+- "outro": saudações, agradecimentos, conversa geral sem intenção clara
+
+IMPORTANTE: Se a mensagem é uma PERGUNTA ou DÚVIDA, use "duvida" ou "comercial", NUNCA "boleto" ou "suporte" por engano.
 
 Mensagem: "${mensagem}"
 
 Responda exatamente neste formato JSON:
-{"intent": "boleto", "descricao": "resumo curto da mensagem"}`;
+{"intent": "duvida", "descricao": "resumo curto da mensagem"}`;
 
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -209,11 +215,13 @@ Responda exatamente neste formato JSON:
 // Fallback regex caso Groq esteja indisponível
 function classificarIntencaoFallback(msg) {
   const m = msg.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  if (m.match(/boleto|fatura|pix|segunda via|vencimento|debito|cobranca|conta/)) return 'boleto';
   if (m.match(/j[aá] paguei|j[aá] pago|efetuei|realizei|fiz o pix|paguei hoje|paguei ontem|efetuou|realizou|confirmei pagamento/)) return 'pagou';
-  if (m.match(/sem internet|sem sinal|caiu|lento|travando|sem conexao|fibra|rompimento|nao funciona|parou|reinici|modem|roteador|luz vermelha|luz piscando|vermelho|offline|net caiu|sem net|sem wifi|wifi/)) return 'suporte';
+  if (m.match(/quero pagar|preciso do boleto|manda.*(fatura|boleto)|segunda via|2.?via|boleto|fatura|vencimento/)) return 'boleto';
+  if (m.match(/sem internet|sem sinal|caiu|lento|travando|sem conexao|rompimento|nao funciona|parou|reinici|modem|roteador|luz vermelha|luz piscando|vermelho|offline|net caiu|sem net|sem wifi|wifi caiu/)) return 'suporte';
   if (m.match(/cancelar|cancelamento|quero cancelar|desistir|nao quero mais/)) return 'cancelamento';
-  if (m.match(/falar com|atendente|humano|pessoa|responsavel|gerente|contrato|plano|instalar|instalacao|mudanca|mudei|quero assinar|quero contratar|novo cliente|contratar/)) return 'atendente';
+  if (m.match(/quero assinar|quero contratar|quero instalar|quanto custa|qual.*(plano|valor|preco)|tem plano|planos disponiveis|novo cliente/)) return 'comercial';
+  if (m.match(/como funciona|o que e|me explica|me fala sobre|o que sao|diferenca entre|duvida|pergunta|entender/)) return 'duvida';
+  if (m.match(/falar com|atendente|humano|pessoa|responsavel|gerente|instalacao|mudanca|mudei/)) return 'atendente';
   return 'outro';
 }
 
@@ -636,6 +644,16 @@ async function handleIdentificacaoPorCpf(cliente, telefone, mensagem) {
     }
   }
 
+  // Dúvida geral — responder sem pedir CPF
+  if (intencao === 'duvida') {
+    return handleDuvida(cliente, telefone, mensagem, null);
+  }
+
+  // Interesse comercial — encaminhar para equipe sem pedir CPF
+  if (intencao === 'comercial') {
+    return handleComercial(cliente, telefone, mensagem, null);
+  }
+
   // Quer contratar — encaminhar direto para atendente
   if (intencao === 'atendente') {
     await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'atendente_novo_cliente' });
@@ -759,6 +777,8 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
   }
 
   // ── Intenções principais ──────────────────────────────────────────────────
+  if (intencao === 'duvida')       return handleDuvida(cliente, telefone, mensagem, nome);
+  if (intencao === 'comercial')    return handleComercial(cliente, telefone, mensagem, nome);
   if (intencao === 'boleto')       return handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente);
   if (intencao === 'pagou')        return handlePagou(cliente, telefone, nome, nomeCompleto, idCliente);
   if (intencao === 'suporte')      return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
@@ -791,6 +811,66 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
 // ═════════════════════════════════════════════════════════════════════════════
 // MÓDULO 10 — AÇÕES (handlers de intenção)
 // ═════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HANDLER: Dúvidas e informações gerais
+// ─────────────────────────────────────────────────────────────────────────────
+async function handleDuvida(cliente, telefone, mensagem, nome) {
+  console.log('[DUVIDA] Respondendo dúvida para', telefone, ':', mensagem.substring(0, 60));
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          { role: 'system', content: `Você é um atendente virtual da PSIU TELECOM, empresa de internet por fibra óptica em Mogi Mirim e região (interior de SP). Seja educado, natural e humano. Use linguagem simples e acessível. Responda dúvidas técnicas de forma didática. Nunca mencione valores ou planos sem ter certeza. Se não souber algo específico da empresa, diga que um atendente pode ajudar melhor. Responda em português, de forma curta (máximo 5 linhas). NÃO mencione fatura, boleto ou cobrança a menos que o cliente pergunte.` },
+          { role: 'user', content: mensagem }
+        ],
+        temperature: 0.7,
+        max_tokens: 300
+      })
+    });
+    const data = await res.json();
+    const resposta = data.choices?.[0]?.message?.content?.trim();
+    if (resposta) {
+      const saudacao = nome && nome !== 'cliente' ? `*${nome}*, ` : '';
+      await enviarMensagem(telefone, `${saudacao}${resposta}
+
+Se precisar de mais alguma coisa, é só perguntar! 😊`);
+    } else {
+      throw new Error('Resposta vazia do Groq');
+    }
+  } catch (e) {
+    console.error('[DUVIDA] Erro ao gerar resposta:', e.message);
+    await enviarMensagem(telefone, `Oi${nome && nome !== 'cliente' ? ', *' + nome + '*' : ''}! 😊 Essa é uma ótima pergunta! Para te explicar melhor, vou te passar para um dos nossos atendentes. Um momento! 🙏`);
+    if (cliente?.id) await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'atendente_novo_cliente' });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HANDLER: Interesse comercial (querer contratar, preços, planos)
+// ─────────────────────────────────────────────────────────────────────────────
+async function handleComercial(cliente, telefone, mensagem, nome) {
+  console.log('[COMERCIAL] Interesse comercial para', telefone);
+  const saudacao = nome && nome !== 'cliente' ? `*${nome}*` : 'olá';
+  await enviarMensagem(telefone,
+    `Oi, ${saudacao}! 😊 Que ótimo que você tem interesse na PSIU TELECOM!
+
+` +
+    `🌐 Somos especializados em *internet por fibra óptica* com alta velocidade e estabilidade para Mogi Mirim e região.
+
+` +
+    `Para te apresentar os planos disponíveis para o seu endereço e verificar cobertura, vou conectar você com nossa equipe comercial! 👇`
+  );
+  const msg = atendenteDisponivel()
+    ? `Um atendente entrará em contato em breve! 🚀`
+    : `Nosso horário de atendimento é *seg-sex das 9h às 20h*. Assim que nossa equipe chegar, entraremos em contato! 😊`;
+  await enviarMensagem(telefone, msg);
+  if (cliente?.id) await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'atendente_novo_cliente' });
+  await registrarAtendimento(telefone, nome || 'cliente', cliente?.id_cliente_receitanet || null, 'comercial', mensagem, 'encaminhado_atendente', false);
+  await alertarRafa('💼', 'INTERESSE COMERCIAL', nome || 'cliente', telefone, `📲 Cliente interessado em contratar ou conhecer planos!`);
+}
 
 async function handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente) {
   await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
