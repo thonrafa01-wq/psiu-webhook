@@ -1,0 +1,41 @@
+{
+  "type": "object",
+  "properties": {
+    "nome": {
+      "type": "string"
+    },
+    "descricao": {
+      "type": "string"
+    },
+    "criador": {
+      "type": "string"
+    },
+    "tipo": {
+      "type": "string",
+      "enum": [
+        "publica",
+        "privada"
+      ]
+    },
+    "ativa": {
+      "type": "boolean"
+    },
+    "agentes_ativos": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "participantes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "senha_sala": {
+      "type": "string"
+    }
+  },
+  "required": [],
+  "name": "Sala"
+}

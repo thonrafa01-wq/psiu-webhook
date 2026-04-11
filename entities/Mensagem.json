@@ -1,0 +1,45 @@
+{
+  "type": "object",
+  "properties": {
+    "sala_id": {
+      "type": "string"
+    },
+    "autor_nome": {
+      "type": "string"
+    },
+    "autor_tipo": {
+      "type": "string",
+      "enum": [
+        "humano",
+        "agente",
+        "sistema"
+      ]
+    },
+    "conteudo": {
+      "type": "string"
+    },
+    "tipo": {
+      "type": "string",
+      "enum": [
+        "texto",
+        "sistema",
+        "resumo",
+        "dm"
+      ]
+    },
+    "dm_para": {
+      "type": "string"
+    },
+    "dm_de": {
+      "type": "string"
+    },
+    "lida": {
+      "type": "boolean"
+    },
+    "reacoes": {
+      "type": "object"
+    }
+  },
+  "required": [],
+  "name": "Mensagem"
+}

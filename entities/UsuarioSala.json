@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "properties": {
+    "nome": {
+      "type": "string"
+    },
+    "avatar_cor": {
+      "type": "string"
+    },
+    "token": {
+      "type": "string"
+    },
+    "senha_hash": {
+      "type": "string"
+    },
+    "online": {
+      "type": "boolean"
+    },
+    "ultimo_ping": {
+      "type": "string"
+    },
+    "sala_atual": {
+      "type": "string"
+    },
+    "papel": {
+      "type": "string",
+      "enum": [
+        "admin",
+        "membro"
+      ]
+    }
+  },
+  "required": [],
+  "name": "UsuarioSala"
+}

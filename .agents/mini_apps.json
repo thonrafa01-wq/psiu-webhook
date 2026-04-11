@@ -4,6 +4,9 @@
   "pages": {
     "Dashboard": {
       "title": "Dashboard"
+    },
+    "MeetChat": {
+      "title": "MeetChat"
     }
   }
 }

@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "properties": {
+    "nome": {
+      "type": "string"
+    },
+    "avatar_emoji": {
+      "type": "string"
+    },
+    "personalidade": {
+      "type": "string"
+    },
+    "instrucoes": {
+      "type": "string"
+    },
+    "ativo": {
+      "type": "boolean"
+    },
+    "cor": {
+      "type": "string"
+    },
+    "trigger": {
+      "type": "string"
+    }
+  },
+  "required": [],
+  "name": "AgenteIA"
+}
