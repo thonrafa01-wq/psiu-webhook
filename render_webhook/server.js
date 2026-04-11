@@ -276,11 +276,24 @@ function extrairDados(body) {
   // Caption da imagem (texto junto com a foto)
   const imageCaption = body.image?.caption || body.caption || '';
 
+  // Detectar documento/PDF
+  let isDocument = false;
+  if (body.type === 'DocumentMessage' || body.document || body.document?.documentUrl) {
+    isDocument = true;
+  }
+  if (!isDocument) {
+    const bodyStr = JSON.stringify(body);
+    if (bodyStr.includes('.pdf') || bodyStr.includes('DocumentMessage') || bodyStr.includes('"document"')) {
+      isDocument = true;
+    }
+  }
+
   if (audioUrl) console.log('[AUDIO] URL detectada:', audioUrl);
   if (imageUrl) console.log('[IMAGE] URL detectada:', imageUrl);
-  console.log('[EXTRACT]', { phone, mensagem: mensagem.substring(0, 50), audioUrl: !!audioUrl, imageUrl: !!imageUrl, type: body.type });
+  if (isDocument) console.log('[DOC] Documento/PDF detectado');
+  console.log('[EXTRACT]', { phone, mensagem: mensagem.substring(0, 50), audioUrl: !!audioUrl, imageUrl: !!imageUrl, isDocument, type: body.type });
 
-  return { telefone: phone, mensagem, audioUrl, imageUrl, imageCaption, fromMe: isFromMe || false };
+  return { telefone: phone, mensagem, audioUrl, imageUrl, imageCaption, isDocument, fromMe: isFromMe || false };
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -335,6 +348,12 @@ app.post('/webhook', async (req, res) => {
         await enviarMensagem(telefone, `Recebi seu áudio mas não consegui entender. Pode digitar sua mensagem? 😊`);
         return;
       }
+    }
+
+    // Ignorar documentos/PDFs silenciosamente (não confundir com texto)
+    if (req.body.isDocument || (extrairDados(req.body).isDocument)) {
+      console.log('[DOC] Documento ignorado — não processa como mensagem de texto');
+      return;
     }
 
     // Processar imagem se houver
@@ -503,7 +522,11 @@ app.post('/webhook', async (req, res) => {
         await handleClienteIdentificado(cliente, telefone, mensagemRecebida);
         return;
       }
-      // Telefone ainda não bate — ir para identificação por CPF
+      // Telefone ainda não bate — salvar mensagem original se ainda não tiver, e pedir CPF
+      if (!cliente.mensagem_original_pre_cpf) {
+        await dbUpdate('ClienteWhatsapp', cliente.id, { mensagem_original_pre_cpf: mensagemRecebida });
+        cliente = { ...cliente, mensagem_original_pre_cpf: mensagemRecebida };
+      }
       await handleIdentificacaoPorCpf(cliente, telefone, mensagemRecebida);
       return;
     }
@@ -574,6 +597,18 @@ app.post('/webhook', async (req, res) => {
 async function handleIdentificacaoPorCpf(cliente, telefone, mensagem) {
   const intencao = await classificarIntencao(mensagem);
   const cpf = mensagem.replace(/\D/g, '');
+
+  // Atualizar mensagem original se nova mensagem não for CPF (cliente ainda explorando)
+  const cpfCheck = mensagem.replace(/\D/g, '');
+  if (cpfCheck.length < 11 && cliente.estado_conversa === 'aguardando_cpf') {
+    // Mensagem não parece CPF — atualizar mensagem original se fizer sentido
+    const naoEhCPF = mensagem.length > 5 && !/^\d/.test(mensagem.trim());
+    if (naoEhCPF && (!cliente.mensagem_original_pre_cpf || cliente.mensagem_original_pre_cpf.length < mensagem.length)) {
+      await dbUpdate('ClienteWhatsapp', cliente.id, { mensagem_original_pre_cpf: mensagem });
+      cliente = { ...cliente, mensagem_original_pre_cpf: mensagem };
+      console.log('[CPF] Mensagem original atualizada:', mensagem.substring(0, 60));
+    }
+  }
 
   // Se veio um CPF/CNPJ válido — tentar identificar
   if (cpf.length >= 11 && cpf.length <= 14) {
