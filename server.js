@@ -176,7 +176,15 @@ Intenções possíveis:
 - "atendente": cliente quer falar com humano explicitamente (ex: "quero falar com atendente", "me passa pra um humano")
 - "outro": saudações, agradecimentos, conversa geral sem intenção clara
 
-IMPORTANTE: Se a mensagem é uma PERGUNTA ou DÚVIDA, use "duvida" ou "comercial", NUNCA "boleto" ou "suporte" por engano.
+IMPORTANTE:
+- "Boa noite tudo bem vocês sabe me dizer se a internet está com problema" → "suporte" (cliente perguntando sobre problema NA REDE DELE)
+- "Sim estamos sem internet" → "suporte"
+- "Estou sem sinal" / "Caiu a internet" / "Sem conexão" → "suporte"
+- Se a mensagem é uma PERGUNTA TÉCNICA GERAL (como funciona X), use "duvida"
+- Se menciona SEM internet / CAIU / OFFLINE = sempre "suporte"
+- Saudações puras ("oi", "boa tarde", "bom dia") = "outro"
+- "tudo bem" sozinho = "outro"
+- Afirmação confirmando problema ("sim", "é isso", "pode") = "suporte" se há contexto de internet
 
 Mensagem: "${mensagem}"
 
@@ -633,9 +641,9 @@ async function handleIdentificacaoPorCpf(cliente, telefone, mensagem) {
       };
       await dbUpdate('ClienteWhatsapp', cliente.id, dados);
       cliente = { ...cliente, ...dados };
-      // Identificado com sucesso — usar mensagem original se houver
+      // Identificado com sucesso — usar mensagem original (o que motivou o contato)
       const msgOriginal = cliente.mensagem_original_pre_cpf || mensagem;
-      console.log('[CPF] mensagem original recuperada:', msgOriginal.substring(0, 80));
+      console.log('[CPF] mensagem original recuperada para orquestrador:', msgOriginal.substring(0, 80));
       await handleClienteIdentificado(cliente, telefone, msgOriginal);
       return;
     } else {
@@ -757,7 +765,7 @@ Nossa equipe já foi acionada e está trabalhando na resolução.
   }
 
   // ── Para tudo mais (dúvidas, saudações, comercial, conversa) → IA conversacional ──
-  return handleIAConversacional(cliente, telefone, mensagem, nome, nomeCompleto, idCliente, intencao);
+  return handleIAConversacional(cliente, telefone, mensagem, nome, nomeCompleto, idCliente, intencao, cliente.mensagem_original_pre_cpf);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
