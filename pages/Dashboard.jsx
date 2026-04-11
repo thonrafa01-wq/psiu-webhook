@@ -132,7 +132,7 @@ export default function Dashboard() {
       const timeout = setTimeout(() => controller.abort(), 20000); // 20s timeout
       let res;
       try {
-        res = await fetch(`${WEBHOOK_URL}/dashboard-data`, { signal: controller.signal });
+        res = await fetch(`${WEBHOOK_URL}/dashboard-data`, { signal: controller.signal, headers: { 'x-service-key': 'vMUGDUNk_08X3aIZKDyHrFLDGEnLza8pfe53Pvv3tkU' } });
         clearTimeout(timeout);
       } catch(fetchErr) {
         clearTimeout(timeout);
