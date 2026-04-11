@@ -1199,6 +1199,182 @@ app.post('/encerrar', authMiddleware, async (req, res) => {
   }
 });
 
+
+// ═════════════════════════════════════════════════════════════════════════════
+// MÓDULO — RELATÓRIO DIÁRIO AUTOMÁTICO
+// ═════════════════════════════════════════════════════════════════════════════
+const fs   = require('fs');
+const path = require('path');
+
+const RELATORIOS_DIR = path.join(__dirname, 'relatorios');
+if (!fs.existsSync(RELATORIOS_DIR)) fs.mkdirSync(RELATORIOS_DIR, { recursive: true });
+
+async function gerarRelatorioDiario(dataAlvo) {
+  // dataAlvo: 'YYYY-MM-DD' (default: ontem)
+  const hoje     = new Date();
+  const ontem    = dataAlvo ? new Date(dataAlvo + 'T00:00:00-03:00') : new Date(hoje.getTime() - 86400000);
+  const inicio   = new Date(ontem); inicio.setHours(0,0,0,0);
+  const fim      = new Date(ontem); fim.setHours(23,59,59,999);
+  const dataStr  = ontem.toISOString().slice(0,10);
+  const diaSemana = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'][ontem.getDay()];
+
+  console.log(`[RELATORIO] Gerando relatório de ${dataStr}...`);
+
+  // Buscar dados
+  const [atendimentos, clientes] = await Promise.all([
+    dbFilter('Atendimento', { limit: 500, sort: '-data_atendimento' }),
+    dbFilter('ClienteWhatsapp', { limit: 500 })
+  ]);
+
+  const ats = Array.isArray(atendimentos) ? atendimentos : [];
+  const cls = Array.isArray(clientes)     ? clientes     : [];
+
+  // Filtrar por período
+  const doDia = ats.filter(a => {
+    const d = new Date(a.data_atendimento || a.created_date);
+    return d >= inicio && d <= fim;
+  });
+
+  // Métricas
+  const total           = doDia.length;
+  const resolvidos      = doDia.filter(a => a.resolvido === true || a.estado_final === 'resolvido').length;
+  const encaminhados    = doDia.filter(a => a.estado_final === 'encaminhado_atendente').length;
+  const emAberto        = doDia.filter(a => ['em_andamento','encaminhado_atendente'].includes(a.estado_final)).length;
+  const taxaResolucao   = total > 0 ? Math.round((resolvidos / total) * 100) : 0;
+
+  // Motivos
+  const motivoMap = {};
+  for (const a of doDia) {
+    const m = a.motivo || 'não_identificado';
+    motivoMap[m] = (motivoMap[m] || 0) + 1;
+  }
+  const motivosOrdenados = Object.entries(motivoMap).sort((a,b) => b[1]-a[1]);
+
+  // Clientes únicos
+  const telefonesUnicos = [...new Set(doDia.map(a => a.telefone))];
+  const clientesNovos   = cls.filter(c => {
+    const d = new Date(c.created_date);
+    return d >= inicio && d <= fim;
+  }).length;
+
+  // Horários de pico
+  const horarios = {};
+  for (const a of doDia) {
+    const h = new Date(a.data_atendimento || a.created_date).getHours();
+    const faixa = `${String(h).padStart(2,'0')}:00`;
+    horarios[faixa] = (horarios[faixa] || 0) + 1;
+  }
+  const picoHorario = Object.entries(horarios).sort((a,b)=>b[1]-a[1])[0];
+
+  // Atendimentos sem resolução (pendentes)
+  const pendentes = doDia.filter(a => emAberto && ['em_andamento','encaminhado_atendente'].includes(a.estado_final));
+
+  // ─── Montar relatório em texto ────────────────────────────────────────────
+  const linhas = [
+    `╔══════════════════════════════════════════════════════════╗`,
+    `║        RELATÓRIO DIÁRIO — PSIU TELECOM                  ║`,
+    `║        ${diaSemana}, ${dataStr}                                  ║`.slice(0,65) + '║',
+    `╚══════════════════════════════════════════════════════════╝`,
+    ``,
+    `📊 RESUMO GERAL`,
+    `─────────────────────────────────────────`,
+    `  Total de atendimentos : ${total}`,
+    `  Clientes únicos       : ${telefonesUnicos.length}`,
+    `  Clientes novos        : ${clientesNovos}`,
+    `  Resolvidos pelo bot   : ${resolvidos} (${taxaResolucao}%)`,
+    `  Encaminhados (humano) : ${encaminhados}`,
+    `  Em aberto ao final    : ${emAberto}`,
+    `  Horário de pico       : ${picoHorario ? picoHorario[0] + ' (' + picoHorario[1] + ' msgs)' : 'n/a'}`,
+    ``,
+    `📋 MOTIVOS DOS ATENDIMENTOS`,
+    `─────────────────────────────────────────`,
+    ...motivosOrdenados.map(([m, qtd]) => {
+      const barra = '█'.repeat(Math.min(Math.round(qtd/total*20),20));
+      return `  ${m.padEnd(25)} ${String(qtd).padStart(3)}  ${barra}`;
+    }),
+    ``,
+    `⏰ DISTRIBUIÇÃO POR HORA`,
+    `─────────────────────────────────────────`,
+    ...Object.entries(horarios).sort().map(([h, qtd]) => {
+      const barra = '█'.repeat(Math.min(qtd, 30));
+      return `  ${h}  ${barra} (${qtd})`;
+    }),
+  ];
+
+  if (pendentes.length > 0) {
+    linhas.push(``, `⚠️  ATENDIMENTOS PENDENTES (${pendentes.length})`);
+    linhas.push(`─────────────────────────────────────────`);
+    for (const p of pendentes.slice(0,10)) {
+      linhas.push(`  • ${p.nome_cliente || p.telefone} — ${p.motivo || '?'} (${p.estado_final})`);
+    }
+  }
+
+  linhas.push(``, `─────────────────────────────────────────`);
+  linhas.push(`Gerado automaticamente às ${new Date().toLocaleString('pt-BR', {timeZone:'America/Sao_Paulo'})}`);
+  linhas.push(`Para análise: envie este arquivo ao agente IA no painel PSIU.`);
+
+  const conteudo = linhas.join('\n');
+  const nomeArquivo = `relatorio_${dataStr}.txt`;
+  const caminhoArquivo = path.join(RELATORIOS_DIR, nomeArquivo);
+  fs.writeFileSync(caminhoArquivo, conteudo, 'utf8');
+
+  console.log(`[RELATORIO] ✅ Salvo em: ${caminhoArquivo}`);
+  return { conteudo, nomeArquivo, caminhoArquivo, dataStr, total, resolvidos, encaminhados, emAberto, taxaResolucao };
+}
+
+// ─── Cron interno: todo dia à meia-noite (horário de Brasília = 03:00 UTC) ──
+function agendarRelatorioDiario() {
+  const agora   = new Date();
+  const brasilia = new Date(agora.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+  const amanha  = new Date(brasilia);
+  amanha.setDate(amanha.getDate() + 1);
+  amanha.setHours(0, 0, 30, 0); // 00:00:30 de Brasília
+  const diffMs  = amanha.getTime() - brasilia.getTime();
+  console.log(`[RELATORIO] Próximo relatório em ${Math.round(diffMs/60000)} minutos.`);
+  setTimeout(async () => {
+    try { await gerarRelatorioDiario(); } catch(e) { console.error('[RELATORIO] Erro:', e.message); }
+    agendarRelatorioDiario(); // reagendar para o próximo dia
+  }, diffMs);
+}
+agendarRelatorioDiario();
+
+// ─── Endpoint: baixar relatório do dia (ou de uma data específica) ──────────
+app.get('/relatorio', authMiddleware, async (req, res) => {
+  try {
+    const data = req.query.data; // ex: ?data=2026-04-10
+    const hoje  = new Date();
+    const ontem = new Date(hoje.getTime() - 86400000);
+    const dataStr = data || ontem.toISOString().slice(0,10);
+    const arquivo  = path.join(RELATORIOS_DIR, `relatorio_${dataStr}.txt`);
+
+    if (!fs.existsSync(arquivo)) {
+      // Gerar agora se não existir
+      const r = await gerarRelatorioDiario(dataStr);
+      res.setHeader('Content-Disposition', `attachment; filename="${r.nomeArquivo}"`);
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      return res.send(r.conteudo);
+    }
+
+    res.setHeader('Content-Disposition', `attachment; filename="relatorio_${dataStr}.txt"`);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.send(fs.readFileSync(arquivo, 'utf8'));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Endpoint: forçar geração de relatório agora (útil p/ teste) ─────────────
+app.post('/relatorio/gerar', authMiddleware, async (req, res) => {
+  try {
+    const data = req.body.data; // opcional
+    const r = await gerarRelatorioDiario(data);
+    res.json({ ok: true, arquivo: r.nomeArquivo, total: r.total, resolvidos: r.resolvidos, encaminhados: r.encaminhados, emAberto: r.emAberto, taxaResolucao: r.taxaResolucao });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
 // ═════════════════════════════════════════════════════════════════════════════
 // START
 // ═════════════════════════════════════════════════════════════════════════════
