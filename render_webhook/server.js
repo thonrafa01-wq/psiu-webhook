@@ -3,15 +3,45 @@ const express = require('express');
 const FormData = require('form-data');
 const fetch = require('node-fetch');
 
+// ── Fetch com timeout global (evita travamento por APIs lentas) ──────────────
+async function fetchWithTimeout(url, opts = {}, ms = 10000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...opts, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ── JSON seguro (evita crash quando API retorna HTML em erro 502/504) ─────────
+async function safeJson(res) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    console.warn('[safeJson] Resposta não-JSON (status', res.status, '):', text.substring(0, 200));
+    return { _error: true, _status: res.status, _raw: text.substring(0, 200) };
+  }
+}
+
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// CORS — permite chamadas do painel Base44
+// CORS — apenas painel Base44 e Render
+const ALLOWED_ORIGINS = [
+  'https://untitled-app-f813ec8a.base44.app',
+  'https://app.base44.com',
+  'https://psiu-webhook.onrender.com'
+];
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  const origin = req.headers.origin;
+  if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-service-key');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-service-key, client-token');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
@@ -21,9 +51,9 @@ const RECEITANET_TOKEN  = process.env.RECEITANET_CHATBOT_TOKEN || '';
 const RECEITANET_BASE   = 'https://sistema.receitanet.net/api/novo/chatbot';
 const BASE44_APP_ID     = '69d55fd1a341508858f11d46';
 const BASE44_API        = `https://app.base44.com/api/apps/${BASE44_APP_ID}/entities`;
-const ZAPI_INSTANCE     = '3F15DC3330DCC11BF2A3BE4FDF68D33E';
-const ZAPI_TOKEN        = '0BD8484CB7BFF2DAD22E99B5';
-const ZAPI_CLIENT_TOKEN = 'Fe4e0f41827564db0813cd79b7c5f6e96S';
+const ZAPI_INSTANCE     = process.env.ZAPI_INSTANCE     || '3F15DC3330DCC11BF2A3BE4FDF68D33E';
+const ZAPI_TOKEN        = process.env.ZAPI_TOKEN        || '0BD8484CB7BFF2DAD22E99B5';
+const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || 'Fe4e0f41827564db0813cd79b7c5f6e96S';
 const ZAPI_BASE         = `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}`;
 const RAFA_PHONE        = '5519999619605';
 const GROQ_API_KEY      = process.env.GROQ_API_KEY || '';
@@ -37,40 +67,40 @@ async function dbFilter(entity, query) {
   const params = new URLSearchParams(query).toString();
   const url = `${BASE44_API}/${entity}?${params}`;
   console.log('[DB] GET', url.substring(0, 120));
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     headers: { 'Authorization': `Bearer ${getServiceToken()}`, 'Content-Type': 'application/json' }
-  });
-  return res.json();
+  }, 8000);
+  return safeJson(res);
 }
 
 async function dbCreate(entity, data) {
-  const res = await fetch(`${BASE44_API}/${entity}`, {
+  const res = await fetchWithTimeout(`${BASE44_API}/${entity}`, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${getServiceToken()}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
-  });
-  return res.json();
+  }, 8000);
+  return safeJson(res);
 }
 
 async function dbUpdate(entity, id, data) {
-  const res = await fetch(`${BASE44_API}/${entity}/${id}`, {
+  const res = await fetchWithTimeout(`${BASE44_API}/${entity}/${id}`, {
     method: 'PUT',
     headers: { 'Authorization': `Bearer ${getServiceToken()}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
-  });
-  return res.json();
+  }, 8000);
+  return safeJson(res);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
 // MÓDULO 2 — RECEITANET
 // ═════════════════════════════════════════════════════════════════════════════
 async function receitanetPost(endpoint, extraBody) {
-  const res = await fetch(`${RECEITANET_BASE}/${endpoint}`, {
+  const res = await fetchWithTimeout(`${RECEITANET_BASE}/${endpoint}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token: RECEITANET_TOKEN, app: 'chatbot', ...extraBody })
-  });
-  return res.json();
+  }, 10000);
+  return safeJson(res);
 }
 
 const buscarClientePorTelefone = (phone) => { const phoneSem55 = phone.startsWith('55') ? phone.slice(2) : phone; return receitanetPost('clientes', { phone: phoneSem55 }); };
@@ -243,12 +273,12 @@ async function enviarMensagem(telefone, mensagem) {
   const chars = mensagem.replace(/\s+/g, '').length;
   const delaySegundos = Math.min(12, Math.max(2, Math.round(chars / 40)));
 
-  const res = await fetch(`${ZAPI_BASE}/send-text`, {
+  const res = await fetchWithTimeout(`${ZAPI_BASE}/send-text`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'client-token': ZAPI_CLIENT_TOKEN },
     body: JSON.stringify({ phone: numero, message: mensagem, delay: delaySegundos })
-  });
-  const data = await res.json();
+  }, 12000);
+  const data = await safeJson(res);
   console.log('[Z-API] envio (delay:', delaySegundos, 's):', JSON.stringify(data).substring(0, 150));
   return data;
 }
@@ -348,6 +378,12 @@ app.get('/', (_req, res) => res.send('PSIU TELECOM Webhook - OK'));
 app.get('/webhook', (_req, res) => res.send('PSIU TELECOM Webhook - OK'));
 
 app.post('/webhook', async (req, res) => {
+  // Validar client-token para rejeitar requisições externas
+  const incomingToken = req.headers['client-token'];
+  if (incomingToken && incomingToken !== ZAPI_CLIENT_TOKEN) {
+    console.warn('[WEBHOOK] Token inválido rejeitado:', incomingToken?.substring(0, 10));
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
   res.json({ ok: true }); // Responde imediatamente ao Z-API
 
   try {
@@ -1068,7 +1104,16 @@ app.get('/ping', (req, res) => res.json({ ok: true, ts: Date.now() }));
 app.get('/health', (req, res) => res.json({ status: 'ok', ts: Date.now() }));
 
 // ─── Endpoint: dados do dashboard (acesso service role) ────────────────────
-app.get('/dashboard-data', async (req, res) => {
+const DASHBOARD_SECRET = process.env.DASHBOARD_SECRET || '';
+function authMiddleware(req, res, next) {
+  const key = req.headers['x-service-key'];
+  if (DASHBOARD_SECRET && key !== DASHBOARD_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
+app.get('/dashboard-data', authMiddleware, async (req, res) => {
   try {
     const [atendimentos, clientes] = await Promise.all([
       dbFilter('Atendimento', { limit: 500, sort: '-data_atendimento' }),
@@ -1085,7 +1130,7 @@ app.get('/dashboard-data', async (req, res) => {
   }
 });
 
-app.post('/encerrar', async (req, res) => {
+app.post('/encerrar', authMiddleware, async (req, res) => {
   try {
     const { telefone } = req.body;
     if (!telefone) return res.json({ ok: false, error: 'telefone obrigatório' });
