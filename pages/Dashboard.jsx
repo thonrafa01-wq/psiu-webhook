@@ -416,6 +416,39 @@ export default function Dashboard() {
                   ))}
               </div>
             </div>
+          {/* Seção: Finalizados */}
+            <div className="bg-white rounded-2xl shadow-sm mt-6">
+              <div className="p-4 border-b flex items-center justify-between">
+                <div>
+                  <h3 className="font-semibold text-gray-700">✅ Finalizados hoje</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">Atendimentos encerrados pelo bot ou pelo atendente</p>
+                </div>
+                <span className="bg-green-100 text-green-700 text-xs font-bold px-2 py-1 rounded-full">
+                  {atHoje.filter(a => ["resolvido", "resolvido_auto", "comprovante_enviado", "sem_debitos"].includes(a.estado_final)).length}
+                </span>
+              </div>
+              <div className="divide-y max-h-80 overflow-y-auto">
+                {atHoje.filter(a => ["resolvido", "resolvido_auto", "comprovante_enviado", "sem_debitos"].includes(a.estado_final)).length === 0 ? (
+                  <p className="p-4 text-gray-400 text-sm">Nenhum atendimento finalizado hoje ainda</p>
+                ) : atHoje
+                  .filter(a => ["resolvido", "resolvido_auto", "comprovante_enviado", "sem_debitos"].includes(a.estado_final))
+                  .sort((a, b) => new Date(b.data_atendimento || 0) - new Date(a.data_atendimento || 0))
+                  .map(a => {
+                    const hora = a.data_atendimento ? new Date(a.data_atendimento).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '--:--';
+                    const iconeMotivo = { suporte: '🔧', boleto: '💰', cancelamento: '❌', comprovante_enviado: '🧾', sem_debitos: '✅', pagamento: '💳' }[a.motivo] || '📋';
+                    const labelEstado = { resolvido: 'Resolvido', resolvido_auto: 'Bot', comprovante_enviado: 'Comprovante', sem_debitos: 'Sem débitos' }[a.estado_final] || a.estado_final;
+                    return (
+                      <div key={a.id} className="p-3 flex items-center justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium text-sm text-gray-800 truncate">{iconeMotivo} {a.nome_cliente || "Sem nome"}</p>
+                          <p className="text-xs text-gray-400">{a.telefone?.replace(/^55/, '')} · {hora}</p>
+                        </div>
+                        <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0">{labelEstado}</span>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
           </div>
         )}
 
