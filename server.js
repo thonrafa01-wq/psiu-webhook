@@ -206,24 +206,30 @@ REGRA PRINCIPAL: Classifique pela INTENÇÃO real, não por palavras soltas.
 Intenções possíveis:
 - "duvida": cliente quer entender algo, fazer uma pergunta geral (ex: "como funciona fibra", "o que é ONU", "quais planos vocês têm", "qual a velocidade")
 - "comercial": cliente quer contratar, instalar, conhecer preços, mudar de plano, indicar alguém (ex: "quero assinar", "quanto custa", "tem plano de 200mb")
-- "boleto": cliente quer segunda via, boleto, fatura, PIX para pagar (ex: "preciso do boleto", "manda minha fatura", "quero pagar")
+- "boleto": cliente quer segunda via, boleto, fatura, PIX para pagar, OU quer saber se tem dívida/fatura em aberto (ex: "preciso do boleto", "manda minha fatura", "quero pagar", "tenho faturas em aberto?", "tenho alguma pendência?", "estou devendo?", "tem alguma fatura?", "minha conta está em dia?")
 - "pagou": cliente diz que JÁ pagou (ex: "já paguei", "fiz o pix", "efetuei pagamento")
 - "suporte": cliente relata problema ATUAL com internet (ex: "sem internet", "caiu", "lento", "luz vermelha", "sem sinal")
 - "resolvido": cliente diz que o problema foi resolvido (ex: "voltou", "funcionou", "tá ok")
-- "verificar_conexao": cliente quer saber o status da conexão dele (ex: "tô online?", "verifica minha conexão")
+- "verificar_conexao": cliente quer saber o status da conexão DELE (ex: "tô online?", "verifica minha conexão", "estou conectado?"). ATENÇÃO: reclamações sobre o bot não conseguir verificar algo NÃO são verificar_conexao — classifique pelo contexto real da mensagem anterior
 - "cancelamento": cliente quer cancelar o serviço
 - "atendente": cliente quer falar com humano explicitamente (ex: "quero falar com atendente", "me passa pra um humano")
 - "outro": saudações, agradecimentos, conversa geral sem intenção clara
 
 IMPORTANTE:
-- "Boa noite tudo bem vocês sabe me dizer se a internet está com problema" → "suporte" (cliente perguntando sobre problema NA REDE DELE)
+- "Boa noite tudo bem vocês sabe me dizer se a internet está com problema" → "suporte"
 - "Sim estamos sem internet" → "suporte"
 - "Estou sem sinal" / "Caiu a internet" / "Sem conexão" → "suporte"
-- Se a mensagem é uma PERGUNTA TÉCNICA GERAL (como funciona X), use "duvida"
+- "Tenho faturas em aberto?" / "Estou devendo?" / "Tem alguma fatura?" → "boleto"
+- "Minha conta está em dia?" / "Tenho alguma pendência?" / "Devo alguma coisa?" → "boleto"
+- "Já paguei" / "Fiz o PIX" / "Pagamento efetuado" → "pagou"
 - Se menciona SEM internet / CAIU / OFFLINE = sempre "suporte"
+- Se pergunta sobre status financeiro/conta/fatura = sempre "boleto"
 - Saudações puras ("oi", "boa tarde", "bom dia") = "outro"
 - "tudo bem" sozinho = "outro"
+- Se a mensagem é uma PERGUNTA TÉCNICA GERAL (como funciona X), use "duvida"
 - Afirmação confirmando problema ("sim", "é isso", "pode") = "suporte" se há contexto de internet
+- "Vc nao consegue verificar" / "você não consegue fazer isso?" → classifique pelo CONTEXTO ANTERIOR, use "outro" se ambíguo
+- Mensagens curtas de frustração com o bot ("não entendeu", "errou", "não consegue") → "atendente" 
 
 Mensagem: "${mensagem}"
 
@@ -269,7 +275,7 @@ Responda exatamente neste formato JSON:
 function classificarIntencaoFallback(msg) {
   const m = msg.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   if (m.match(/j[aá] paguei|j[aá] pago|efetuei|realizei|fiz o pix|paguei hoje|paguei ontem|efetuou|realizou|confirmei pagamento/)) return 'pagou';
-  if (m.match(/quero pagar|preciso do boleto|manda.*(fatura|boleto)|segunda via|2.?via|boleto|fatura|vencimento/)) return 'boleto';
+  if (m.match(/quero pagar|preciso do boleto|manda.*(fatura|boleto)|segunda via|2.?via|boleto|fatura|vencimento|faturas em aberto|tenho debito|tenho divida|estou devendo|pendenci|em atraso|minha conta.*dia|conta em dia|alguma fatura|devo algo/)) return 'boleto';
   if (m.match(/sem internet|sem sinal|caiu|lento|travando|sem conexao|rompimento|nao funciona|parou|reinici|modem|roteador|luz vermelha|luz piscando|vermelho|offline|net caiu|sem net|sem wifi|wifi caiu/)) return 'suporte';
   if (m.match(/cancelar|cancelamento|quero cancelar|desistir|nao quero mais/)) return 'cancelamento';
   if (m.match(/quero assinar|quero contratar|quero instalar|quanto custa|qual.*(plano|valor|preco)|tem plano|planos disponiveis|novo cliente/)) return 'comercial';
@@ -827,6 +833,12 @@ Nossa equipe já foi acionada e está trabalhando na resolução.
 // ─────────────────────────────────────────────────────────────────────────────
 async function handleIAConversacional(cliente, telefone, mensagem, nome, nomeCompleto, idCliente, intencao) {
   console.log('[IA-CONV] Respondendo via IA para', telefone, '| intent:', intencao);
+
+  // Segurança: se classificador mandou boleto/pagou aqui por engano, redirecionar
+  if (intencao === 'boleto') return handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente);
+  if (intencao === 'pagou')  return handlePagou(cliente, telefone, nome, nomeCompleto, idCliente);
+  if (intencao === 'suporte') return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
+
   try {
     const prompt = `Você é um atendente virtual da PSIU TELECOM, empresa de internet por fibra óptica em Mogi Mirim e região (SP).
 
@@ -842,7 +854,7 @@ REGRAS:
 2. Se for dúvida técnica (fibra, modem, velocidade, etc.): explique de forma simples e didática.
 3. Se for pergunta sobre planos ou preços: diga que temos planos de fibra óptica e que um atendente pode passar os valores atualizados — ofereça conectar.
 4. Seja SEMPRE conciso: máximo 4 linhas por resposta.
-5. NÃO mencione fatura, boleto ou pagamento a menos que o cliente pergunte.
+5. Se o cliente perguntar sobre conta, fatura ou pagamento, diga que vai verificar agora mesmo (o sistema vai buscar automaticamente).
 6. NÃO use listas numeradas ou bullet points com opções de menu.
 7. Use o nome do cliente naturalmente, mas não em toda frase.
 8. Responda em português informal e caloroso.
