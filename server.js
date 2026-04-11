@@ -73,7 +73,7 @@ async function receitanetPost(endpoint, extraBody) {
   return res.json();
 }
 
-const buscarClientePorTelefone = (phone)     => receitanetPost('clientes', { phone });
+const buscarClientePorTelefone = (phone) => { const phoneSem55 = phone.startsWith('55') ? phone.slice(2) : phone; return receitanetPost('clientes', { phone: phoneSem55 }); };
 const buscarClientePorCpf      = (cpfcnpj)   => receitanetPost('clientes', { cpfcnpj: cpfcnpj.replace(/\D/g, '') });
 const buscarClientePorId       = (idCliente) => receitanetPost('clientes', { idCliente });
 const abrirChamado             = (idCliente, contato) => receitanetPost('abertura-chamado', { idCliente, contato, ocorrenciatipo: 1, motivoos: 1 });
@@ -110,27 +110,78 @@ async function transcreverAudio(audioUrl) {
   }
 }
 
-// 3b. Classificador de intenção via Groq LLM
+// 3b. Analisar imagem com IA (OpenAI GPT-4o vision)
+async function analisarImagem(imageUrl) {
+  try {
+    console.log('[IMG] Analisando imagem:', imageUrl.substring(0, 100));
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+        messages: [{
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: `Você é um assistente técnico para uma empresa de internet de fibra óptica chamada PSIU Telecom.
+Analise esta imagem e classifique em UMA das categorias abaixo. Responda SOMENTE com um JSON válido.
+
+Categorias:
+- "comprovante_pagamento": comprovante de transferência, PIX, TED, DOC, recibo de pagamento, extrato bancário mostrando pagamento
+- "equipamento_problema": foto de roteador, modem, ONT, ONU, caixa de fibra com luz vermelha, equipamento com problema visível
+- "cabo_rompido": cabo de fibra óptica partido, rompido, danificado, no chão, caído, cabo na rua, poste com problema
+- "outro": qualquer outra coisa que não se encaixa acima
+
+Responda neste formato:
+{"tipo": "comprovante_pagamento", "descricao": "resumo do que viu na imagem em 1 frase"}`
+            },
+            { type: 'image_url', image_url: { url: imageUrl } }
+          ]
+        }],
+        temperature: 0,
+        max_tokens: 150
+      })
+    });
+    const data = await res.json();
+    const texto = data.choices?.[0]?.message?.content?.trim() || '{}';
+    console.log('[IMG] Resultado:', texto);
+    const match = texto.match(/\{[^}]+\}/);
+    if (match) return JSON.parse(match[0]);
+    return { tipo: 'outro', descricao: 'imagem não identificada' };
+  } catch (e) {
+    console.error('[IMG] Erro análise:', e.message);
+    return { tipo: 'outro', descricao: 'erro ao analisar' };
+  }
+}
+
+// 3c. Classificador de intenção via Groq LLM
 async function classificarIntencao(mensagem) {
   try {
     const prompt = `Você é um classificador de intenções para um provedor de internet chamado PSIU Telecom.
 
 Analise a mensagem do cliente e responda SOMENTE com um JSON válido, sem explicações.
 
+REGRA PRINCIPAL: Classifique pela INTENÇÃO real, não por palavras soltas.
+
 Intenções possíveis:
-- "boleto": cliente quer segunda via, boleto, fatura ou PIX
-- "pagou": cliente diz que já pagou, efetuou pagamento, realizou pagamento, fez o pix, pagou hoje
-- "suporte": cliente relata problema ATUAL com internet, sem sinal, lento, caiu, equipamento, luz vermelha
-- "resolvido": cliente diz que o problema foi resolvido, voltou, funcionou, conexão voltou, está ok agora
-- "verificar_conexao": cliente quer saber o status da conexão, pede pra verificar se está online
+- "duvida": cliente quer entender algo, fazer uma pergunta geral (ex: "como funciona fibra", "o que é ONU", "quais planos vocês têm", "qual a velocidade")
+- "comercial": cliente quer contratar, instalar, conhecer preços, mudar de plano, indicar alguém (ex: "quero assinar", "quanto custa", "tem plano de 200mb")
+- "boleto": cliente quer segunda via, boleto, fatura, PIX para pagar (ex: "preciso do boleto", "manda minha fatura", "quero pagar")
+- "pagou": cliente diz que JÁ pagou (ex: "já paguei", "fiz o pix", "efetuei pagamento")
+- "suporte": cliente relata problema ATUAL com internet (ex: "sem internet", "caiu", "lento", "luz vermelha", "sem sinal")
+- "resolvido": cliente diz que o problema foi resolvido (ex: "voltou", "funcionou", "tá ok")
+- "verificar_conexao": cliente quer saber o status da conexão dele (ex: "tô online?", "verifica minha conexão")
 - "cancelamento": cliente quer cancelar o serviço
-- "atendente": cliente quer falar com humano, contratar novo plano, instalar, mudança de endereço
-- "outro": qualquer outra coisa
+- "atendente": cliente quer falar com humano explicitamente (ex: "quero falar com atendente", "me passa pra um humano")
+- "outro": saudações, agradecimentos, conversa geral sem intenção clara
+
+IMPORTANTE: Se a mensagem é uma PERGUNTA ou DÚVIDA, use "duvida" ou "comercial", NUNCA "boleto" ou "suporte" por engano.
 
 Mensagem: "${mensagem}"
 
 Responda exatamente neste formato JSON:
-{"intent": "boleto", "descricao": "resumo curto da mensagem"}`;
+{"intent": "duvida", "descricao": "resumo curto da mensagem"}`;
 
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -164,11 +215,13 @@ Responda exatamente neste formato JSON:
 // Fallback regex caso Groq esteja indisponível
 function classificarIntencaoFallback(msg) {
   const m = msg.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  if (m.match(/boleto|fatura|pix|segunda via|vencimento|debito|cobranca|conta/)) return 'boleto';
   if (m.match(/j[aá] paguei|j[aá] pago|efetuei|realizei|fiz o pix|paguei hoje|paguei ontem|efetuou|realizou|confirmei pagamento/)) return 'pagou';
-  if (m.match(/sem internet|sem sinal|caiu|lento|travando|sem conexao|fibra|rompimento|nao funciona|parou|reinici|modem|roteador|luz vermelha|luz piscando|vermelho|offline|net caiu|sem net|sem wifi|wifi/)) return 'suporte';
+  if (m.match(/quero pagar|preciso do boleto|manda.*(fatura|boleto)|segunda via|2.?via|boleto|fatura|vencimento/)) return 'boleto';
+  if (m.match(/sem internet|sem sinal|caiu|lento|travando|sem conexao|rompimento|nao funciona|parou|reinici|modem|roteador|luz vermelha|luz piscando|vermelho|offline|net caiu|sem net|sem wifi|wifi caiu/)) return 'suporte';
   if (m.match(/cancelar|cancelamento|quero cancelar|desistir|nao quero mais/)) return 'cancelamento';
-  if (m.match(/falar com|atendente|humano|pessoa|responsavel|gerente|contrato|plano|instalar|instalacao|mudanca|mudei|quero assinar|quero contratar|novo cliente|contratar/)) return 'atendente';
+  if (m.match(/quero assinar|quero contratar|quero instalar|quanto custa|qual.*(plano|valor|preco)|tem plano|planos disponiveis|novo cliente/)) return 'comercial';
+  if (m.match(/como funciona|o que e|me explica|me fala sobre|o que sao|diferenca entre|duvida|pergunta|entender/)) return 'duvida';
+  if (m.match(/falar com|atendente|humano|pessoa|responsavel|gerente|instalacao|mudanca|mudei/)) return 'atendente';
   return 'outro';
 }
 
@@ -221,10 +274,34 @@ function extrairDados(body) {
     if (match) audioUrl = match[1];
   }
 
-  if (audioUrl) console.log('[AUDIO] URL detectada:', audioUrl);
-  console.log('[EXTRACT]', { phone, mensagem: mensagem.substring(0, 50), audioUrl: !!audioUrl, type: body.type });
+  // Capturar URL de imagem
+  let imageUrl = body.image?.imageUrl || body.image?.url || body.imageUrl || null;
+  if (!imageUrl && body.type === 'ImageMessage' && body.image) imageUrl = body.image.imageUrl || body.image.url || body.image;
+  if (!imageUrl && body.type === 'ReceivedCallback') {
+    const matchImg = JSON.stringify(body).match(/"(https?:[^"]*\.(?:jpg|jpeg|png|webp|gif)[^"]*)"/i);
+    if (matchImg) imageUrl = matchImg[1];
+  }
+  // Caption da imagem (texto junto com a foto)
+  const imageCaption = body.image?.caption || body.caption || '';
 
-  return { telefone: phone, mensagem, audioUrl, fromMe: isFromMe || false };
+  // Detectar documento/PDF
+  let isDocument = false;
+  if (body.type === 'DocumentMessage' || body.document || body.document?.documentUrl) {
+    isDocument = true;
+  }
+  if (!isDocument) {
+    const bodyStr = JSON.stringify(body);
+    if (bodyStr.includes('.pdf') || bodyStr.includes('DocumentMessage') || bodyStr.includes('"document"')) {
+      isDocument = true;
+    }
+  }
+
+  if (audioUrl) console.log('[AUDIO] URL detectada:', audioUrl);
+  if (imageUrl) console.log('[IMAGE] URL detectada:', imageUrl);
+  if (isDocument) console.log('[DOC] Documento/PDF detectado');
+  console.log('[EXTRACT]', { phone, mensagem: mensagem.substring(0, 50), audioUrl: !!audioUrl, imageUrl: !!imageUrl, isDocument, type: body.type });
+
+  return { telefone: phone, mensagem, audioUrl, imageUrl, imageCaption, isDocument, fromMe: isFromMe || false };
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -266,7 +343,7 @@ app.post('/webhook', async (req, res) => {
   res.json({ ok: true }); // Responde imediatamente ao Z-API
 
   try {
-    const { telefone, mensagem: mensagemTexto, audioUrl, fromMe } = extrairDados(req.body);
+    const { telefone, mensagem: mensagemTexto, audioUrl, imageUrl, imageCaption, fromMe } = extrairDados(req.body);
 
     // Transcrever áudio se necessário
     let mensagemRecebida = mensagemTexto;
@@ -278,6 +355,70 @@ app.post('/webhook', async (req, res) => {
       } else {
         await enviarMensagem(telefone, `Recebi seu áudio mas não consegui entender. Pode digitar sua mensagem? 😊`);
         return;
+      }
+    }
+
+    // Ignorar documentos/PDFs silenciosamente (não confundir com texto)
+    if (req.body.isDocument || (extrairDados(req.body).isDocument)) {
+      console.log('[DOC] Documento ignorado — não processa como mensagem de texto');
+      return;
+    }
+
+    // Processar imagem se houver
+    if (imageUrl && !mensagemRecebida) {
+      // Buscar cliente para ter nome disponível
+      const clienteImg = await (async () => {
+        try {
+          const lista = await dbFilter('ClienteWhatsapp', { telefone });
+          return Array.isArray(lista) && lista.length > 0 ? lista[0] : null;
+        } catch { return null; }
+      })();
+      const nomeImg = clienteImg?.nome ? clienteImg.nome.split(' ')[0].charAt(0).toUpperCase() + clienteImg.nome.split(' ')[0].slice(1).toLowerCase() : 'cliente';
+
+      const analise = await analisarImagem(imageUrl);
+      console.log('[IMG] Tipo detectado:', analise.tipo, '| desc:', analise.descricao);
+
+      if (analise.tipo === 'comprovante_pagamento') {
+        await enviarMensagem(telefone,
+          `Recebi seu comprovante, *${nomeImg}*! ✅\n\n` +
+          `O processamento do pagamento segue estes prazos:\n\n` +
+          `💳 *PIX:* reconhecimento em até *15 minutos* — sua internet volta automaticamente assim que compensar!\n` +
+          `🏦 *Boleto / código de barras:* compensação em até *1 dia útil* após o pagamento.`
+        );
+        if (clienteImg?.id_cliente_receitanet) {
+          await registrarAtendimento(telefone, clienteImg.nome || '', clienteImg.id_cliente_receitanet, 'comprovante_enviado', 'Cliente enviou foto de comprovante', 'resolvido', true);
+        }
+        return;
+      }
+
+      if (analise.tipo === 'cabo_rompido') {
+        await enviarMensagem(telefone,
+          `Obrigado por nos avisar, *${nomeImg}*! 🙏\n\n` +
+          `Encaminhei *urgentemente* para nossa equipe técnica. Cabo rompido é prioridade máxima — nosso time irá até o local o mais rápido possível! 🚨\n\n` +
+          `Se souber a localização exata (rua, bairro, perto de qual número), pode me informar que ajuda muito! 📍`
+        );
+        await alertarRafa('🚨', 'CABO ROMPIDO REPORTADO', nomeImg, telefone, `Cliente enviou foto de cabo rompido/danificado na rua!\nVerificar localização e enviar técnico!\nDescrição: ${analise.descricao}`);
+        if (clienteImg?.id_cliente_receitanet) {
+          await registrarAtendimento(telefone, clienteImg.nome || '', clienteImg.id_cliente_receitanet, 'cabo_rompido', 'Cliente enviou foto de cabo rompido', 'em_andamento', false);
+        }
+        return;
+      }
+
+      if (analise.tipo === 'equipamento_problema') {
+        await enviarMensagem(telefone,
+          `Recebi a foto do seu equipamento, *${nomeImg}*! 📸\n\n` +
+          `Vou verificar o status da sua conexão agora... aguarda um instante! ⏳`
+        );
+        // Tratar como suporte técnico para verificar equipamento
+        mensagemRecebida = 'equipamento com problema luz vermelha';
+      } else {
+        // Imagem não reconhecida — tratar legenda ou pedir texto
+        if (imageCaption) {
+          mensagemRecebida = imageCaption;
+        } else {
+          await enviarMensagem(telefone, `Recebi sua imagem, *${nomeImg}*! 📸 Como posso te ajudar? Me conta o que precisa 😊`);
+          return;
+        }
       }
     }
 
@@ -389,7 +530,11 @@ app.post('/webhook', async (req, res) => {
         await handleClienteIdentificado(cliente, telefone, mensagemRecebida);
         return;
       }
-      // Telefone ainda não bate — ir para identificação por CPF
+      // Telefone ainda não bate — salvar mensagem original se ainda não tiver, e pedir CPF
+      if (!cliente.mensagem_original_pre_cpf) {
+        await dbUpdate('ClienteWhatsapp', cliente.id, { mensagem_original_pre_cpf: mensagemRecebida });
+        cliente = { ...cliente, mensagem_original_pre_cpf: mensagemRecebida };
+      }
       await handleIdentificacaoPorCpf(cliente, telefone, mensagemRecebida);
       return;
     }
@@ -444,7 +589,8 @@ app.post('/webhook', async (req, res) => {
     cliente = await dbCreate('ClienteWhatsapp', {
       telefone, identificado: false,
       ultimo_contato: new Date().toISOString(),
-      estado_conversa: 'aguardando_cpf'
+      estado_conversa: 'aguardando_cpf',
+      mensagem_original_pre_cpf: mensagemRecebida
     });
     await handleIdentificacaoPorCpf(cliente, telefone, mensagemRecebida);
 
@@ -459,6 +605,18 @@ app.post('/webhook', async (req, res) => {
 async function handleIdentificacaoPorCpf(cliente, telefone, mensagem) {
   const intencao = await classificarIntencao(mensagem);
   const cpf = mensagem.replace(/\D/g, '');
+
+  // Atualizar mensagem original se nova mensagem não for CPF (cliente ainda explorando)
+  const cpfCheck = mensagem.replace(/\D/g, '');
+  if (cpfCheck.length < 11 && cliente.estado_conversa === 'aguardando_cpf') {
+    // Mensagem não parece CPF — atualizar mensagem original se fizer sentido
+    const naoEhCPF = mensagem.length > 5 && !/^\d/.test(mensagem.trim());
+    if (naoEhCPF && (!cliente.mensagem_original_pre_cpf || cliente.mensagem_original_pre_cpf.length < mensagem.length)) {
+      await dbUpdate('ClienteWhatsapp', cliente.id, { mensagem_original_pre_cpf: mensagem });
+      cliente = { ...cliente, mensagem_original_pre_cpf: mensagem };
+      console.log('[CPF] Mensagem original atualizada:', mensagem.substring(0, 60));
+    }
+  }
 
   // Se veio um CPF/CNPJ válido — tentar identificar
   if (cpf.length >= 11 && cpf.length <= 14) {
@@ -475,13 +633,25 @@ async function handleIdentificacaoPorCpf(cliente, telefone, mensagem) {
       };
       await dbUpdate('ClienteWhatsapp', cliente.id, dados);
       cliente = { ...cliente, ...dados };
-      // Identificado com sucesso — processar como cliente normal
-      await handleClienteIdentificado(cliente, telefone, mensagem);
+      // Identificado com sucesso — usar mensagem original se houver
+      const msgOriginal = cliente.mensagem_original_pre_cpf || mensagem;
+      console.log('[CPF] mensagem original recuperada:', msgOriginal.substring(0, 80));
+      await handleClienteIdentificado(cliente, telefone, msgOriginal);
       return;
     } else {
       await enviarMensagem(telefone, `Não encontrei cadastro com esse CPF/CNPJ. 😕\n\nVerifica se está correto. Se preferir, nossa equipe pode te ajudar por aqui mesmo!`);
       return;
     }
+  }
+
+  // Dúvida geral — responder sem pedir CPF
+  if (intencao === 'duvida') {
+    return handleDuvida(cliente, telefone, mensagem, null);
+  }
+
+  // Interesse comercial — encaminhar para equipe sem pedir CPF
+  if (intencao === 'comercial') {
+    return handleComercial(cliente, telefone, mensagem, null);
   }
 
   // Quer contratar — encaminhar direto para atendente
@@ -509,7 +679,15 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
   const idCliente    = cliente.id_cliente_receitanet;
   const nome         = primeiroNome(cliente.nome);
   const nomeCompleto = cliente.nome || 'cliente';
-  const estado       = cliente.estado_conversa;
+  let estado         = cliente.estado_conversa;
+
+  // ── Normalizar estado residual: cliente identificado não deve estar em aguardando_cpf ──
+  if (estado === 'aguardando_cpf' && idCliente) {
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+    cliente = { ...cliente, estado_conversa: 'identificado' };
+    estado = 'identificado';
+    console.log('[ESTADO] Normalizado aguardando_cpf → identificado para', telefone);
+  }
 
   // ── MODO SILÊNCIO: cliente em atendimento humano — bot não interfere ────────
   if (estado === 'atendente' || estado === 'atendente_novo_cliente') {
@@ -599,6 +777,8 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
   }
 
   // ── Intenções principais ──────────────────────────────────────────────────
+  if (intencao === 'duvida')       return handleDuvida(cliente, telefone, mensagem, nome);
+  if (intencao === 'comercial')    return handleComercial(cliente, telefone, mensagem, nome);
   if (intencao === 'boleto')       return handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente);
   if (intencao === 'pagou')        return handlePagou(cliente, telefone, nome, nomeCompleto, idCliente);
   if (intencao === 'suporte')      return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
@@ -631,6 +811,66 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
 // ═════════════════════════════════════════════════════════════════════════════
 // MÓDULO 10 — AÇÕES (handlers de intenção)
 // ═════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HANDLER: Dúvidas e informações gerais
+// ─────────────────────────────────────────────────────────────────────────────
+async function handleDuvida(cliente, telefone, mensagem, nome) {
+  console.log('[DUVIDA] Respondendo dúvida para', telefone, ':', mensagem.substring(0, 60));
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          { role: 'system', content: `Você é um atendente virtual da PSIU TELECOM, empresa de internet por fibra óptica em Mogi Mirim e região (interior de SP). Seja educado, natural e humano. Use linguagem simples e acessível. Responda dúvidas técnicas de forma didática. Nunca mencione valores ou planos sem ter certeza. Se não souber algo específico da empresa, diga que um atendente pode ajudar melhor. Responda em português, de forma curta (máximo 5 linhas). NÃO mencione fatura, boleto ou cobrança a menos que o cliente pergunte.` },
+          { role: 'user', content: mensagem }
+        ],
+        temperature: 0.7,
+        max_tokens: 300
+      })
+    });
+    const data = await res.json();
+    const resposta = data.choices?.[0]?.message?.content?.trim();
+    if (resposta) {
+      const saudacao = nome && nome !== 'cliente' ? `*${nome}*, ` : '';
+      await enviarMensagem(telefone, `${saudacao}${resposta}
+
+Se precisar de mais alguma coisa, é só perguntar! 😊`);
+    } else {
+      throw new Error('Resposta vazia do Groq');
+    }
+  } catch (e) {
+    console.error('[DUVIDA] Erro ao gerar resposta:', e.message);
+    await enviarMensagem(telefone, `Oi${nome && nome !== 'cliente' ? ', *' + nome + '*' : ''}! 😊 Essa é uma ótima pergunta! Para te explicar melhor, vou te passar para um dos nossos atendentes. Um momento! 🙏`);
+    if (cliente?.id) await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'atendente_novo_cliente' });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HANDLER: Interesse comercial (querer contratar, preços, planos)
+// ─────────────────────────────────────────────────────────────────────────────
+async function handleComercial(cliente, telefone, mensagem, nome) {
+  console.log('[COMERCIAL] Interesse comercial para', telefone);
+  const saudacao = nome && nome !== 'cliente' ? `*${nome}*` : 'olá';
+  await enviarMensagem(telefone,
+    `Oi, ${saudacao}! 😊 Que ótimo que você tem interesse na PSIU TELECOM!
+
+` +
+    `🌐 Somos especializados em *internet por fibra óptica* com alta velocidade e estabilidade para Mogi Mirim e região.
+
+` +
+    `Para te apresentar os planos disponíveis para o seu endereço e verificar cobertura, vou conectar você com nossa equipe comercial! 👇`
+  );
+  const msg = atendenteDisponivel()
+    ? `Um atendente entrará em contato em breve! 🚀`
+    : `Nosso horário de atendimento é *seg-sex das 9h às 20h*. Assim que nossa equipe chegar, entraremos em contato! 😊`;
+  await enviarMensagem(telefone, msg);
+  if (cliente?.id) await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'atendente_novo_cliente' });
+  await registrarAtendimento(telefone, nome || 'cliente', cliente?.id_cliente_receitanet || null, 'comercial', mensagem, 'encaminhado_atendente', false);
+  await alertarRafa('💼', 'INTERESSE COMERCIAL', nome || 'cliente', telefone, `📲 Cliente interessado em contratar ou conhecer planos!`);
+}
 
 async function handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente) {
   await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
