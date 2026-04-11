@@ -394,10 +394,10 @@ export default function Dashboard() {
                 <p className="text-xs text-gray-400 mt-0.5">Toque em "Assumir" para pausar o bot e atender manualmente</p>
               </div>
               <div className="divide-y max-h-80 overflow-y-auto">
-                {clientes.filter(c => !ESTADOS_HUMANO.includes(c.estado_conversa) && c.identificado).length === 0 ? (
+                {clientes.filter(c => !ESTADOS_HUMANO.includes(c.estado_conversa) && c.identificado && c.ultimo_contato && (new Date() - new Date(c.ultimo_contato)) < 2 * 60 * 60 * 1000).length === 0 ? (
                   <p className="p-4 text-gray-400 text-sm">Nenhum cliente ativo no bot</p>
                 ) : clientes
-                  .filter(c => !ESTADOS_HUMANO.includes(c.estado_conversa) && c.identificado)
+                  .filter(c => !ESTADOS_HUMANO.includes(c.estado_conversa) && c.identificado && c.ultimo_contato && (new Date() - new Date(c.ultimo_contato)) < 2 * 60 * 60 * 1000)
                   .sort((a, b) => new Date(b.ultimo_contato || 0) - new Date(a.ultimo_contato || 0))
                   .map(c => (
                     <div key={c.id} className="p-3 flex items-center justify-between gap-3">
