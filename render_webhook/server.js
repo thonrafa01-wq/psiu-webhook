@@ -762,6 +762,28 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
     return;
   }
 
+  // ── Estado aguardando_liberacao: cliente respondendo se quer liberar ───────
+  if (estado === 'aguardando_liberacao') {
+    const respostaNorm = mensagem.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+    const confirmou = respostaNorm.match(/^(sim|s|yes|quero|pode|ok|claro|vai|tá|ta|bora|libera|confirmo|confirma|isso|afirmativo|com certeza|por favor|pfv|plz|yep|yep|yap)/);
+    const recusou   = respostaNorm.match(/^(nao|n|no|nope|nã|cancelar|desistir|nada|deixa|para|pare|tchau|agora nao|depois)/);
+    if (confirmou) {
+      return handleLiberacaoConfirmada(cliente, telefone, nome, nomeCompleto, idCliente);
+    } else if (recusou) {
+      await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+      await enviarMensagem(telefone, `Tudo bem, *${nome}*! Quando o pagamento compensar, sua internet volta automaticamente. 😊
+
+Se precisar de mais alguma coisa é só chamar!`);
+      return;
+    } else {
+      // Resposta ambígua — perguntar de novo
+      await enviarMensagem(telefone, `*${nome}*, desculpa, não entendi. Deseja que eu libere sua conexão agora?
+
+Responda *Sim* ou *Não* 😊`);
+      return;
+    }
+  }
+
   // ── Classificar intenção para ações que precisam de lógica especial ─────────
   const intencao = await classificarIntencao(mensagem);
   console.log('[INTENCAO]', intencao, '| estado:', estado, '| telefone:', telefone);
