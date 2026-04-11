@@ -201,6 +201,22 @@ export default function Dashboard() {
     }
   }
 
+  // Baixar relatório diário
+  async function baixarRelatorio(data) {
+    const dataStr = data || new Date(Date.now() - 86400000).toISOString().slice(0,10);
+    const url = `${WEBHOOK_URL}/relatorio?data=${dataStr}`;
+    try {
+      const res = await fetch(url, { headers: { 'x-service-key': 'vMUGDUNk_08X3aIZKDyHrFLDGEnLza8pfe53Pvv3tkU' } });
+      if (!res.ok) { toast("❌ Erro ao baixar relatório", "error"); return; }
+      const blob = await res.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `relatorio_${dataStr}.txt`;
+      link.click();
+      toast("📄 Relatório baixado!", "success");
+    } catch(e) { toast("❌ Erro: " + e.message, "error"); }
+  }
+
   // Encerrar todos os atendimentos humanos de uma vez
   async function encerrarTodos() {
     if (emAtendimentoHumano.length === 0) return;
@@ -275,6 +291,7 @@ export default function Dashboard() {
             <button onClick={carregarDados} disabled={recarregando} className={`${recarregando ? 'bg-green-300 cursor-wait' : 'bg-green-500 hover:bg-green-400'} p-2 rounded-lg text-sm transition-colors`}>
               {recarregando ? '⏳' : '🔄'}
             </button>
+            <button onClick={() => baixarRelatorio()} title="Baixar relatório de ontem" className="bg-indigo-600 hover:bg-indigo-500 p-2 rounded-lg text-sm transition-colors">📄</button>
             <button onClick={() => { sessionStorage.removeItem("psiu_auth"); setAutenticado(false); }} className="bg-green-700 hover:bg-green-600 p-2 rounded-lg text-sm">🚪</button>
           </div>
         </div>
