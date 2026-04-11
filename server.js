@@ -804,8 +804,8 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
     return;
   }
 
-  // ── Mensagem não reconhecida ──────────────────────────────────────────────
-  await enviarMensagem(telefone, `Oi, *${nome}*! 😊 Como posso te ajudar?\n\n💰 *Boleto* — segunda via e PIX\n🔧 *Suporte* — problemas com internet\n👤 *Atendente* — falar com nossa equipe`);
+  // ── Mensagem não reconhecida ou saudação → responder com IA naturalmente ────
+  return handleDuvida(cliente, telefone, mensagem, nome);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -824,7 +824,16 @@ async function handleDuvida(cliente, telefone, mensagem, nome) {
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
         messages: [
-          { role: 'system', content: `Você é um atendente virtual da PSIU TELECOM, empresa de internet por fibra óptica em Mogi Mirim e região (interior de SP). Seja educado, natural e humano. Use linguagem simples e acessível. Responda dúvidas técnicas de forma didática. Nunca mencione valores ou planos sem ter certeza. Se não souber algo específico da empresa, diga que um atendente pode ajudar melhor. Responda em português, de forma curta (máximo 5 linhas). NÃO mencione fatura, boleto ou cobrança a menos que o cliente pergunte.` },
+          { role: 'system', content: `Você é um atendente virtual da PSIU TELECOM, empresa de internet por fibra óptica em Mogi Mirim e região (interior de SP). Seja educado, natural e humano — como um atendente real de WhatsApp.
+
+REGRAS:
+- Se a mensagem for uma saudação (oi, olá, bom dia, etc): responda com saudação calorosa e pergunte como pode ajudar de forma natural, SEM listar menus ou opções com emojis/bullets
+- Se for dúvida técnica: explique de forma simples e didática
+- Se for pergunta geral: responda naturalmente
+- Nunca mencione valores sem certeza. Se não souber algo específico, diga que pode passar para um atendente
+- Responda em português, de forma curta (máximo 4 linhas)
+- NÃO mencione fatura, boleto ou cobrança a menos que o cliente pergunte
+- NÃO use listas com bullet points ou emojis excessivos — pareça humano` },
           { role: 'user', content: mensagem }
         ],
         temperature: 0.7,
