@@ -673,7 +673,7 @@ async function handleIdentificacaoPorCpf(cliente, telefone, mensagem) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// MÓDULO 9 — ORQUESTRADOR (cliente identificado)
+// MÓDULO 9 — ORQUESTRADOR IA CONVERSACIONAL (cliente identificado)
 // ═════════════════════════════════════════════════════════════════════════════
 async function handleClienteIdentificado(cliente, telefone, mensagem) {
   const idCliente    = cliente.id_cliente_receitanet;
@@ -681,133 +681,134 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
   const nomeCompleto = cliente.nome || 'cliente';
   let estado         = cliente.estado_conversa;
 
-  // ── Normalizar estado residual: cliente identificado não deve estar em aguardando_cpf ──
+  // ── Normalizar estado residual ─────────────────────────────────────────────
   if (estado === 'aguardando_cpf' && idCliente) {
     await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
     cliente = { ...cliente, estado_conversa: 'identificado' };
     estado = 'identificado';
-    console.log('[ESTADO] Normalizado aguardando_cpf → identificado para', telefone);
   }
 
-  // ── MODO SILÊNCIO: cliente em atendimento humano — bot não interfere ────────
+  // ── MODO SILÊNCIO: atendimento humano ativo ────────────────────────────────
   if (estado === 'atendente' || estado === 'atendente_novo_cliente') {
-    console.log('[SILENCIO] Cliente em atendimento humano — bot silenciado para', telefone);
+    console.log('[SILENCIO] Cliente em atendimento humano:', telefone);
     return;
   }
 
-  // Classificar intenção via Groq
+  // ── Classificar intenção para ações que precisam de lógica especial ─────────
   const intencao = await classificarIntencao(mensagem);
-  console.log('[INTENCAO]', intencao, '| estado:', estado);
+  console.log('[INTENCAO]', intencao, '| estado:', estado, '| telefone:', telefone);
 
   // ── Detecção de massiva ───────────────────────────────────────────────────
   if (intencao === 'suporte') {
-    const trintaMinAtras = new Date(Date.now() - 120 * 60 * 1000).toISOString(); // janela de 2 horas
+    const trintaMinAtras = new Date(Date.now() - 120 * 60 * 1000).toISOString();
     const todosChamados  = await dbFilter('Atendimento', { motivo: 'suporte' });
-    // Contar apenas CLIENTES DIFERENTES (excluindo o próprio) nos últimos 30min
-    // Excluir o próprio cliente E o número do Rafa do contador de massiva
     const clientesRecentes = Array.isArray(todosChamados)
       ? [...new Set(
           todosChamados
             .filter(c => c.data_atendimento > trintaMinAtras
                       && c.telefone !== telefone
-                      && c.telefone !== RAFA_PHONE
-                      && c.telefone !== RAFA_PHONE.replace('55',''))
+                      && c.telefone !== RAFA_PHONE)
             .map(c => c.telefone)
         )]
       : [];
-    const totalClientesDiferentes = clientesRecentes.length;
 
-    console.log('[MASSIVA] Clientes diferentes nos últimos 30min (excluindo o atual):', totalClientesDiferentes);
-
-    if (totalClientesDiferentes >= 3) {
+    if (clientesRecentes.length >= 3) {
       await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'massiva' });
       await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'massiva', false);
-      await enviarMensagem(telefone, `Oi, *${nome}*! 😔 Identificamos uma instabilidade na rede que pode estar afetando sua região.\n\nNossa equipe já foi acionada e está trabalhando na resolução.\n\n⏱️ *Previsão: até 5 horas* — te avisamos assim que normalizar. Pedimos desculpas! 🙏`);
-      if (totalClientesDiferentes === 3) {
-        await alertarRafa('🚨🚨🚨', 'MASSIVA DETECTADA!', nomeCompleto, telefone, `👥 Clientes afetados: *${totalClientesDiferentes + 1}*\n\nVários clientes estão sem internet! Verifique com URGÊNCIA.\n⚡ Clientes já sendo avisados automaticamente.`);
+      await enviarMensagem(telefone, `Oi, *${nome}*! 😔 Identificamos uma instabilidade na rede que pode estar afetando sua região.
+
+Nossa equipe já foi acionada e está trabalhando na resolução.
+
+⏱️ *Previsão: até 5 horas* — te avisamos assim que normalizar. Pedimos desculpas! 🙏`);
+      if (clientesRecentes.length === 3) {
+        await alertarRafa('🚨🚨🚨', 'MASSIVA DETECTADA!', nomeCompleto, telefone, '🚨 Clientes afetados: ' + (clientesRecentes.length + 1) + '\n\nVários clientes estão sem internet! Verifique com URGÊNCIA.');
       }
       return;
     }
   }
 
-  // ── Estado: chamado aberto — aguardando feedback ──────────────────────────
-  if (estado === 'chamado_aberto' && intencao !== 'boleto') {
-    const m = mensagem.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    const foiResolvido = intencao === 'resolvido' || m.match(/funcionou|resolveu|voltou|ta ok|tudo ok|tudo certo|ok|certo|funcionando|obrigad|resolvido|voltou a conexao|conexao voltou|aqui voltou|voltou aqui|ja voltou|internet voltou/);
-    const querVerificar = intencao === 'verificar_conexao' || m.match(/verifica|verificar|conexao|online|offline|status|sinal|internet|minha net|minha conexao/);
-
-    if (foiResolvido) {
-      await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
-      await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'resolvido', true);
-      await enviarMensagem(telefone, `Que ótimo, *${nome}*! Fico feliz que voltou! 😄\n\nSe precisar de mais alguma coisa, é só falar! 🙌`);
-    } else if (querVerificar) {
-      const acesso = await verificarAcesso(idCliente, telefone);
-      const statusAcesso = acesso?.status;
-      if (statusAcesso === 1) {
-        await enviarMensagem(telefone, `*${nome}*, verifiquei agora: seu equipamento está *online* ✅\n\nSe ainda estiver com instabilidade, tenta reiniciar o roteador: desliga da tomada por 30 segundos e liga novamente. Nossa equipe também está acompanhando! 🔧`);
-      } else if (statusAcesso === 2) {
-        await enviarMensagem(telefone, `*${nome}*, seu equipamento ainda aparece *offline* no nosso sistema. 📡\n\nNossa equipe técnica já foi acionada e vai entrar em contato em breve! Se quiser falar com um atendente agora, é só dizer.`);
-      } else {
-        await enviarMensagem(telefone, `*${nome}*, não consegui verificar o status agora. Nossa equipe já está ciente e vai te contatar em breve! 🔧`);
-      }
-    } else if (intencao === 'suporte') {
-      // Novo relato de problema com chamado já aberto — informar que já tem chamado aberto
-      await enviarMensagem(telefone, `Entendi, *${nome}*. Já temos um chamado aberto para você e nossa equipe técnica está trabalhando nisso! 🔧\n\nSe quiser falar com um atendente, é só dizer.`);
-    } else {
-      await enviarMensagem(telefone, `Entendi, *${nome}*. Nossa equipe técnica já está ciente e vai entrar em contato em breve! 🔧\n\nSe quiser falar com um atendente, é só dizer.`);
-    }
+  // ── Chamado duplicado ─────────────────────────────────────────────────────
+  if (estado === 'suporte_aberto' && intencao === 'suporte') {
+    await enviarMensagem(telefone, `*${nome}*, já tenho um chamado aberto pra você! 🔧 Nossa equipe técnica já está ciente. Assim que houver atualização, te aviso. Se quiser, posso te passar para um atendente.`);
     return;
   }
 
-  // ── Estado: aguardando confirmação de liberação em confiança ──────────────
-  if (estado === 'aguardando_liberacao') {
-    const m = mensagem.toLowerCase();
-    if (m.match(/sim|quero|pode|libera|confirmo|s[iì]m|yes|ok|certo/)) {
-      return handleLiberacaoConfirmada(cliente, telefone, nome, nomeCompleto, idCliente);
-    } else {
-      await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
-      await enviarMensagem(telefone, `Tudo bem, *${nome}*! Quando o pagamento compensar no sistema, sua conexão será liberada automaticamente. Se precisar de mais alguma coisa, é só chamar 😊`);
-      return;
-    }
-  }
-
-  // ── Estado: retenção de cancelamento ─────────────────────────────────────
-  if (estado === 'cancelamento_retencao' && intencao !== 'boleto' && intencao !== 'suporte') {
-    return handleRetencao(cliente, telefone, mensagem, nome);
-  }
-
-  // ── Intenções principais ──────────────────────────────────────────────────
-  if (intencao === 'duvida')       return handleDuvida(cliente, telefone, mensagem, nome);
-  if (intencao === 'comercial')    return handleComercial(cliente, telefone, mensagem, nome);
-  if (intencao === 'boleto')       return handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente);
-  if (intencao === 'pagou')        return handlePagou(cliente, telefone, nome, nomeCompleto, idCliente);
-  if (intencao === 'suporte')      return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
-  if (intencao === 'cancelamento') return handleCancelamento(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
-  if (intencao === 'atendente')    return handleAtendente(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
-
-  if (intencao === 'verificar_conexao') {
-    const acesso = await verificarAcesso(idCliente, telefone);
-    const statusAcesso = acesso?.status;
-    if (statusAcesso === 1) {
-      await enviarMensagem(telefone, `*${nome}*, verifiquei agora: seu equipamento está *online* ✅\n\nSe estiver com alguma instabilidade, tenta reiniciar o roteador: desliga da tomada por 30 segundos e liga novamente. Se persistir, é só falar que abro um chamado! 🔧`);
-    } else if (statusAcesso === 2) {
-      return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
-    } else {
-      await enviarMensagem(telefone, `*${nome}*, não consegui verificar o status agora. Se estiver com problema de internet, me diga e abro um chamado técnico! 🔧`);
-    }
-    return;
-  }
-
+  // ── Ações que precisam de integração (boleto, pagamento, suporte) ──────────
+  if (intencao === 'boleto')            return handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente);
+  if (intencao === 'pagou')             return handlePagou(cliente, telefone, nome, nomeCompleto, idCliente);
+  if (intencao === 'suporte')           return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
+  if (intencao === 'cancelamento')      return handleCancelamento(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
+  if (intencao === 'atendente')         return handleAtendente(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
   if (intencao === 'resolvido') {
     await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
-    await enviarMensagem(telefone, `Que ótimo, *${nome}*! 😄 Se precisar de mais alguma coisa, é só falar! 🙌`);
+    await enviarMensagem(telefone, `Que ótimo, *${nome}*! 😄 Fico feliz que resolveu! Se precisar de mais alguma coisa é só chamar 🙌`);
+    return;
+  }
+  if (intencao === 'verificar_conexao') {
+    const acesso = await verificarAcesso(idCliente, telefone);
+    if (acesso?.status === 1) {
+      await enviarMensagem(telefone, `*${nome}*, acabei de verificar: seu equipamento está *online* ✅\n\nSe ainda estiver com lentidão, tenta reiniciar o roteador: desliga da tomada por 30 segundos e liga de novo. Se persistir, abro um chamado! 🔧`);
+    } else if (acesso?.status === 2) {
+      return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
+    } else {
+      await enviarMensagem(telefone, `*${nome}*, não consegui verificar o status agora. Se estiver com problema de internet me diga que abro um chamado técnico! 🔧`);
+    }
     return;
   }
 
-  // ── Mensagem não reconhecida ou saudação → responder com IA naturalmente ────
-  return handleDuvida(cliente, telefone, mensagem, nome);
+  // ── Para tudo mais (dúvidas, saudações, comercial, conversa) → IA conversacional ──
+  return handleIAConversacional(cliente, telefone, mensagem, nome, nomeCompleto, idCliente, intencao);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// IA CONVERSACIONAL — responde dúvidas, saudações e qualquer outra coisa
+// ─────────────────────────────────────────────────────────────────────────────
+async function handleIAConversacional(cliente, telefone, mensagem, nome, nomeCompleto, idCliente, intencao) {
+  console.log('[IA-CONV] Respondendo via IA para', telefone, '| intent:', intencao);
+  try {
+    const prompt = `Você é um atendente virtual da PSIU TELECOM, empresa de internet por fibra óptica em Mogi Mirim e região (SP).
+
+PERSONALIDADE: Educado, natural, humano — como um atendente real no WhatsApp. Warm, direto, sem formalidades excessivas.
+
+CONTEXTO DO CLIENTE:
+- Nome: ${nomeCompleto}
+- É cliente cadastrado: sim
+- ID interno: ${idCliente || 'não localizado'}
+
+REGRAS:
+1. Se for saudação (oi, olá, bom dia, boa tarde): responda com calor e pergunte como pode ajudar, de forma natural. NÃO liste menus, NÃO use bullets/números com opções.
+2. Se for dúvida técnica (fibra, modem, velocidade, etc.): explique de forma simples e didática.
+3. Se for pergunta sobre planos ou preços: diga que temos planos de fibra óptica e que um atendente pode passar os valores atualizados — ofereça conectar.
+4. Seja SEMPRE conciso: máximo 4 linhas por resposta.
+5. NÃO mencione fatura, boleto ou pagamento a menos que o cliente pergunte.
+6. NÃO use listas numeradas ou bullet points com opções de menu.
+7. Use o nome do cliente naturalmente, mas não em toda frase.
+8. Responda em português informal e caloroso.
+
+Mensagem do cliente: "${mensagem}"`;
+
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.7,
+        max_tokens: 250
+      })
+    });
+    const data = await res.json();
+    const resposta = data.choices?.[0]?.message?.content?.trim();
+    if (resposta) {
+      await enviarMensagem(telefone, resposta);
+    } else {
+      throw new Error('Resposta vazia');
+    }
+  } catch (e) {
+    console.error('[IA-CONV] Erro:', e.message);
+    await enviarMensagem(telefone, `Oi, *${nome}*! 😊 Como posso te ajudar hoje?`);
+  }
+}
 // ═════════════════════════════════════════════════════════════════════════════
 // MÓDULO 10 — AÇÕES (handlers de intenção)
 // ═════════════════════════════════════════════════════════════════════════════
