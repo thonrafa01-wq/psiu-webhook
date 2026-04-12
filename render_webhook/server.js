@@ -831,6 +831,17 @@ Nossa equipe já foi acionada e está trabalhando na resolução.
   if (intencao === 'atendente')         return handleAtendente(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
   if (intencao === 'resolvido') {
     await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+    // Dar baixa automática em todos os atendimentos abertos deste cliente
+    try {
+      const abertos = await dbFilter('Atendimento', { telefone, limit: 50 });
+      const lista = Array.isArray(abertos) ? abertos : [];
+      const pendentes = lista.filter(a => ['chamado_aberto','em_andamento','encaminhado_atendente'].includes(a.estado_final) && !a.resolvido);
+      for (const at of pendentes) {
+        await dbUpdate('Atendimento', at.id, { estado_final: 'resolvido', resolvido: true });
+        console.log('[RESOLVIDO] Baixa automática no atendimento', at.id, 'de', nomeCompleto);
+      }
+      if (pendentes.length > 0) console.log(`[RESOLVIDO] ${pendentes.length} atendimento(s) fechado(s) para ${telefone}`);
+    } catch(e) { console.error('[RESOLVIDO] Erro ao fechar atendimentos:', e.message); }
     await enviarMensagem(telefone, `Que ótimo, *${nome}*! 😄 Fico feliz que resolveu! Se precisar de mais alguma coisa é só chamar 🙌`);
     return;
   }
