@@ -110,7 +110,7 @@ async function receitanetPost(endpoint, extraBody) {
 const buscarClientePorTelefone = (phone) => { const phoneSem55 = phone.startsWith('55') ? phone.slice(2) : phone; return receitanetPost('clientes', { phone: phoneSem55 }); };
 const buscarClientePorCpf      = (cpfcnpj)   => receitanetPost('clientes', { cpfcnpj: cpfcnpj.replace(/\D/g, '') });
 const buscarClientePorId       = (idCliente) => receitanetPost('clientes', { idCliente });
-const abrirChamado             = (idCliente, contato) => receitanetPost('abertura-chamado', { idCliente, contato, ocorrenciatipo: 1, motivoos: 1 });
+const abrirChamado             = (idCliente, contato, descricao) => receitanetPost('abertura-chamado', { idCliente, contato, ocorrenciatipo: 1, motivoos: 1, descricao: descricao || 'Chamado aberto via chatbot' });
 const verificarAcesso          = (idCliente, contato) => receitanetPost('verificar-acesso', { idCliente, contato });
 const notificacaoPagamento     = (idCliente, contato) => receitanetPost('notificacao-pagamento', { idCliente, contato });
 
@@ -1037,24 +1037,31 @@ async function handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, id
   const equipOffline = statusAcesso === 2;
   console.log('[EQUIP] idCliente:', idCliente, '| status:', statusAcesso, '| msg:', acesso?.msg, '| online:', equipOnline);
 
-  const chamado   = await abrirChamado(idCliente, telefone);
+  // Montar descrição do problema para a OS
+  let tipoProblema = 'Sem internet';
+  if (luzVermelha)   tipoProblema = 'Luz vermelha no equipamento — possível falha na fibra';
+  else if (equipOffline) tipoProblema = 'Equipamento offline — sem sinal';
+  else if (equipOnline)  tipoProblema = 'Equipamento online mas cliente sem internet — instabilidade';
+  const descricaoOS = `${tipoProblema}. Mensagem do cliente: "${mensagem.substring(0, 150)}"`;
+
+  const chamado   = await abrirChamado(idCliente, telefone, descricaoOS);
   const protocolo = chamado.protocolo || chamado.idSuporte || 'gerado';
 
   await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'chamado_aberto' });
   await registrarAtendimento(telefone, nomeCompleto, idCliente, luzVermelha ? 'suporte_campo' : 'suporte', mensagem, 'chamado_aberto', false);
 
   if (luzVermelha) {
-    await enviarMensagem(telefone, `*${nome}*, luz vermelha indica um problema na fibra que precisamos verificar presencialmente. 🔴\n\nJá abri um chamado técnico para visita! Nossa equipe entrará em contato em breve.\n\n📋 Protocolo: ${protocolo}`);
+    await enviarMensagem(telefone, `*${nome}*, luz vermelha indica um problema na fibra que precisamos verificar presencialmente. 🔴\n\nJá abri um chamado técnico para visita! Nossa equipe entrará em contato em breve.\n\n📋 *Protocolo: ${protocolo}*\n\nGuarde esse número para acompanhar seu atendimento.`);
     await alertarRafa('🔴', 'CHAMADO DE CAMPO', nomeCompleto, telefone, `⚠️ Luz vermelha — falha na fibra!\n📋 Protocolo: ${protocolo}`);
   } else if (equipOnline) {
-    await enviarMensagem(telefone, `*${nome}*, seu equipamento aparece *online* no nosso sistema. Pode ser instabilidade momentânea. 🔄\n\nTenta reiniciar o roteador: *desliga da tomada por 30 segundos e liga novamente.*\n\nJá abri um chamado (protocolo: ${protocolo}). Nossa equipe vai verificar remotamente! 🔧`);
+    await enviarMensagem(telefone, `*${nome}*, seu equipamento aparece *online* no nosso sistema. Pode ser instabilidade momentânea. 🔄\n\nTenta reiniciar o roteador: *desliga da tomada por 30 segundos e liga novamente.*\n\nJá abri um chamado técnico! 🔧\n📋 *Protocolo: ${protocolo}*\n\nNossa equipe vai verificar remotamente. Guarde esse número!`);
     await alertarRafa('🟡', 'CHAMADO TÉCNICO', nomeCompleto, telefone, `Equipamento *online* mas cliente sem internet.\n📋 Protocolo: ${protocolo}`);
   } else if (equipOffline) {
-    await enviarMensagem(telefone, `*${nome}*, seu equipamento está *offline* no nosso sistema. 📡\n\nTenta reiniciar: *desliga o roteador da tomada por 30 segundos e liga novamente.*\n\nJá abri um chamado (protocolo: ${protocolo}). Se não resolver, nossa equipe entra em contato! 🔧`);
+    await enviarMensagem(telefone, `*${nome}*, seu equipamento está *offline* no nosso sistema. 📡\n\nTenta reiniciar: *desliga o roteador da tomada por 30 segundos e liga novamente.*\n\nJá abri um chamado técnico! 🔧\n📋 *Protocolo: ${protocolo}*\n\nSe não resolver em 30 minutos, nossa equipe entra em contato. Guarde esse número!`);
     await alertarRafa('🔴', 'CHAMADO DE CAMPO', nomeCompleto, telefone, `Equipamento *offline*.\n📋 Protocolo: ${protocolo}`);
   } else {
     // Não foi possível verificar status — mensagem neutra
-    await enviarMensagem(telefone, `*${nome}*, já abri um chamado técnico para nossa equipe verificar! 🔧\n\nEnquanto isso, tenta reiniciar o roteador: *desliga da tomada por 30 segundos e liga novamente.*\n\n📋 Protocolo: ${protocolo}`);
+    await enviarMensagem(telefone, `*${nome}*, já abri um chamado técnico para nossa equipe verificar! 🔧\n\nEnquanto isso, tenta reiniciar o roteador: *desliga da tomada por 30 segundos e liga novamente.*\n\n📋 *Protocolo: ${protocolo}*\n\nGuarde esse número para acompanhar seu atendimento.`);
     await alertarRafa('🟡', 'CHAMADO TÉCNICO', nomeCompleto, telefone, `Status do equipamento não disponível.\n📋 Protocolo: ${protocolo}`);
   }
 }
