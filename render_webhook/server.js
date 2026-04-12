@@ -676,7 +676,14 @@ async function handleIdentificacaoPorCpf(cliente, telefone, mensagem) {
 
   // Atualizar mensagem original se nova mensagem não for CPF (cliente ainda explorando)
   const cpfCheck = mensagem.replace(/\D/g, '');
-  if (cpfCheck.length < 11 && cliente.estado_conversa === 'aguardando_cpf') {
+
+  // Se a mensagem é SOMENTE números com 11+ dígitos, tratar como CPF/CNPJ direto
+  // (evita o bot perguntar "o que é isso?" quando cliente manda CPF sem formatação)
+  const soSoNumeros = /^\d[\d.\-\/\s]+$/.test(mensagem.trim());
+  if (soSoNumeros && cpfCheck.length >= 11 && cpfCheck.length <= 14) {
+    // Cai direto na busca por CPF abaixo — não vai para IA conversacional
+    console.log('[CPF] Detectado número puro como CPF/CNPJ:', cpfCheck.substring(0, 14));
+  } else if (cpfCheck.length < 11 && cliente.estado_conversa === 'aguardando_cpf') {
     // Mensagem não parece CPF — atualizar mensagem original se fizer sentido
     const naoEhCPF = mensagem.length > 5 && !/^\d/.test(mensagem.trim());
     if (naoEhCPF && (!cliente.mensagem_original_pre_cpf || cliente.mensagem_original_pre_cpf.length < mensagem.length)) {
@@ -735,9 +742,14 @@ async function handleIdentificacaoPorCpf(cliente, telefone, mensagem) {
   }
 
   // Qualquer outra mensagem (inclusive "já sou cliente", "boleto", "suporte")
-  // → pedir CPF para identificar
+  // → pedir CPF para identificar (sem reiniciar com boas-vindas se já está esperando CPF)
   await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_cpf', ultimo_contato: new Date().toISOString() });
-  await enviarMensagem(telefone, `Olá! 👋 Bem-vindo(a) à *PSIU TELECOM*!\n\nNão encontrei seu número no cadastro. Me passa seu *CPF ou CNPJ* para eu te localizar 😊\n\nSe quiser contratar nossos serviços, é só dizer!`);
+  if (cliente.estado_conversa === 'aguardando_cpf') {
+    // Já pediu antes — mensagem mais direta
+    await enviarMensagem(telefone, `Pode me enviar seu *CPF ou CNPJ* (só os números) para eu te localizar no sistema 😊`);
+  } else {
+    await enviarMensagem(telefone, `Olá! 👋 Bem-vindo(a) à *PSIU TELECOM*!\n\nNão encontrei seu número no cadastro. Me passa seu *CPF ou CNPJ* para eu te localizar 😊\n\nSe quiser contratar nossos serviços, é só dizer!`);
+  }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
