@@ -115,7 +115,19 @@ function ehCpfOuCnpj(texto) {
 const buscarClientePorTelefone = (phone) => { const phoneSem55 = phone.startsWith('55') ? phone.slice(2) : phone; return receitanetPost('clientes', { phone: phoneSem55 }); };
 const buscarClientePorCpf      = (cpfcnpj)   => receitanetPost('clientes', { cpfcnpj: cpfcnpj.replace(/\D/g, '') });
 const buscarClientePorId       = (idCliente) => receitanetPost('clientes', { idCliente });
-const abrirChamado             = (idCliente, contato, descricao) => receitanetPost('abertura-chamado', { idCliente, contato, ocorrenciatipo: 1, motivoos: 1, descricao: descricao || 'Chamado aberto via chatbot' });
+const abrirChamado             = (idCliente, contato, descricao) => {
+  const desc = descricao || 'Chamado aberto via chatbot';
+  return receitanetPost('abertura-chamado', {
+    idCliente,
+    contato,
+    ocorrenciatipo: 1,
+    motivoos: 1,
+    servicos: desc,
+    obs: desc,
+    descricao: desc,
+    observacao: desc
+  });
+};
 const verificarAcesso          = (idCliente, contato) => receitanetPost('verificar-acesso', { idCliente, contato });
 const notificacaoPagamento     = (idCliente, contato) => receitanetPost('notificacao-pagamento', { idCliente, contato });
 
