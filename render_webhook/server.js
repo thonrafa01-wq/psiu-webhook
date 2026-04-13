@@ -371,6 +371,28 @@ function extrairDados(body) {
 // ═════════════════════════════════════════════════════════════════════════════
 // MÓDULO 6 — ESTADO E UTILITÁRIOS
 // ═════════════════════════════════════════════════════════════════════════════
+function detectarIrritacao(msg) {
+  if (!msg) return false;
+  const m = msg.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+  // Palavras fortes (alta irritação)
+  if (m.match(/merda|porra|caralho|lixo|pessimo|horrivel|ridiculo|inferno|droga|desgraça|idiota|incompetente/)) return 'alta';
+
+  // Frustração com atendimento
+  if (m.match(/nao resolve|nao adianta|ninguem responde|so enrola|nao ajuda|nao funciona esse atendimento|cancelar|quero cancelar|vou cancelar/)) return 'alta';
+
+  // Reclamações diretas
+  if (m.match(/nao funciona|nao presta|internet ruim|toda hora cai|vive caindo|so cai|instavel|lento demais|horrivel|nao aguento/)) return 'media';
+
+  // CAPS LOCK (raiva) — mais de 10 chars em maiúsculo
+  if (msg === msg.toUpperCase() && msg.replace(/[^A-Za-z]/g,'').length > 8) return 'media';
+
+  // Exclamações/interrogações excessivas
+  if (msg.includes('!!!') || msg.includes('???') || (msg.match(/!/g)||[]).length >= 3) return 'media';
+
+  return false;
+}
+
 function primeiroNome(nomeCompleto) {
   return (nomeCompleto || 'cliente').split(' ')[0];
 }
@@ -496,6 +518,39 @@ app.post('/webhook', async (req, res) => {
 
     console.log('[WEBHOOK]', { telefone, msg: mensagemRecebida.substring(0, 100) });
     console.log('[TELEFONE_BRUTO]', JSON.stringify({ phone: req.body.phone, from: req.body.from, telefoneNormalizado: telefone }));
+
+    // ── DETECTAR IRRITAÇÃO DO CLIENTE ─────────────────────────────────────────
+    const nivelIrritacao = detectarIrritacao(mensagemRecebida);
+    if (nivelIrritacao) {
+      console.log('[HUMOR] Cliente irritado nível:', nivelIrritacao, '| msg:', mensagemRecebida.substring(0, 60));
+
+      // Buscar cliente se já existir (para ter o nome)
+      let clienteTemp = null;
+      try {
+        const listaTemp = await dbFilter('ClienteWhatsapp', { telefone });
+        if (Array.isArray(listaTemp) && listaTemp.length > 0) clienteTemp = listaTemp[0];
+      } catch {}
+      const nomeTemp = clienteTemp?.nome ? primeiroNome(clienteTemp.nome) : 'cliente';
+
+      if (nivelIrritacao === 'alta') {
+        // Prioridade máxima — encaminhar para atendente humano imediatamente
+        await enviarMensagem(telefone,
+          `Entendo sua frustração, *${nomeTemp}* 😕
+
+Vou te colocar em *prioridade máxima* com um atendente agora para resolver isso o mais rápido possível. Aguarda um instante! 🙏`
+        );
+        await alertarRafa('🔥', 'CLIENTE IRRITADO — PRIORIDADE', nomeTemp, telefone, `Mensagem: "${mensagemRecebida}"`);
+        if (clienteTemp?.id) {
+          await dbUpdate('ClienteWhatsapp', clienteTemp.id, { estado_conversa: 'atendente', ultimo_contato: new Date().toISOString() });
+          await registrarAtendimento(telefone, clienteTemp.nome || nomeTemp, clienteTemp.id_cliente_receitanet || null, 'irritacao_alta', mensagemRecebida, 'encaminhado_atendente', false);
+        }
+        return;
+      }
+
+      // Irritação média — suavizar, mas continuar o fluxo normalmente
+      // Não retorna — deixa o fluxo normal tratar a mensagem
+      // O contexto de irritação será capturado pelo fluxo abaixo
+    }
 
     // ── Ignorar mensagens do número do Rafa (quando ele manda pelo próprio celular, não fromMe) ──
     if (telefone === RAFA_PHONE || telefone === RAFA_PHONE.replace('55','')) {
@@ -887,6 +942,12 @@ Nossa equipe já foi acionada e está trabalhando na resolução.
   if (intencao === 'boleto')            return handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente);
   if (intencao === 'pagou')             return handlePagou(cliente, telefone, nome, nomeCompleto, idCliente);
   if (intencao === 'suporte')           return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
+
+  // Se irritação média detectada e chegou até aqui → enriquecer resposta da IA com empatia
+  if (detectarIrritacao(mensagem) === 'media' && intencao === 'duvida') {
+    await enviarMensagem(telefone, `Entendi, *${nome}* 🙏 Deixa eu te ajudar agora mesmo!`);
+    // continua para IA conversacional normalmente
+  }
   if (intencao === 'cancelamento')      return handleCancelamento(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
   if (intencao === 'atendente')         return handleAtendente(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
   if (intencao === 'resolvido') {
