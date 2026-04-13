@@ -1,0 +1,24 @@
+╔══════════════════════════════════════════════════════════╗
+║        RELATÓRIO DIÁRIO — PSIU TELECOM                  ║
+║        Domingo, 2026-04-12                                  ║║
+╚══════════════════════════════════════════════════════════╝
+
+📊 RESUMO GERAL
+─────────────────────────────────────────
+  Total de atendimentos : 0
+  Clientes únicos       : 0
+  Clientes novos        : 0
+  Resolvidos pelo bot   : 0 (0%)
+  Encaminhados (humano) : 0
+  Em aberto ao final    : 0
+  Horário de pico       : n/a
+
+📋 MOTIVOS DOS ATENDIMENTOS
+─────────────────────────────────────────
+
+⏰ DISTRIBUIÇÃO POR HORA
+─────────────────────────────────────────
+
+─────────────────────────────────────────
+Gerado automaticamente às 13/04/2026, 08:02:29
+Para análise: envie este arquivo ao agente IA no painel PSIU.
