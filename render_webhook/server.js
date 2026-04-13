@@ -372,21 +372,35 @@ function extrairDados(body) {
 // MÓDULO 6 — ESTADO E UTILITÁRIOS
 // ═════════════════════════════════════════════════════════════════════════════
 function respostaHumana(tipo, nome) {
+  const n = nome || 'cliente';
   const r = {
     aguarde: [
       `Só um instante que já estou verificando pra você... 👀`,
       `Aguarda um pouquinho, já vejo isso aqui 🔍`,
-      `Deixa comigo, já estou checando... ⚙️`
+      `Deixa comigo, já estou checando... ⚙️`,
+      `Um momento, deixa eu verificar aqui pra você! 🔧`,
+      `Já estou olhando isso aqui... um segundo! 👨‍💻`
     ],
     saudacao: [
-      `Oi, *${nome}*! Tudo bem? 😊`,
-      `Olá, *${nome}*! Vamos resolver isso! 👍`,
-      `Fala, *${nome}*! Como posso te ajudar? 😄`
+      `Oi, *${n}*! Tudo bem? 😊`,
+      `Olá, *${n}*! Como posso te ajudar hoje? 🤝`,
+      `Fala, *${n}*! Vamos resolver isso! 👍`,
+      `Oi, *${n}*! O que posso fazer por você? 😊`
     ],
     chamado_aberto: [
-      `Já abri o chamado aqui pra você, *${nome}*! Nossa equipe vai verificar 🔧`,
-      `Chamado registrado, *${nome}*! A equipe técnica já foi acionada 🛠️`,
-      `Pronto, *${nome}*! Chamado aberto e equipe notificada 📋`
+      `Já abri o chamado pra você, *${n}*! Nossa equipe vai verificar 🔧`,
+      `Chamado registrado, *${n}*! A equipe técnica já foi acionada 🛠️`,
+      `Pronto, *${n}*! Equipe notificada e já está de olho 📋`
+    ],
+    verificando_equip: [
+      `Estou verificando o status do seu equipamento agora, *${n}*... ⏳`,
+      `Deixa eu checar sua conexão aqui no sistema, *${n}*! 🔍`,
+      `Um segundo, *${n}*! Estou olhando o status da sua rede... 📡`
+    ],
+    empatia: [
+      `Entendo, *${n}*! Isso é bem chato mesmo. Deixa comigo 🙏`,
+      `Puxa, *${n}*, sinto muito por isso. Vamos resolver agora! 💪`,
+      `Entendido, *${n}*! Vou priorizar isso pra você agora 🔥`
     ]
   };
   const lista = r[tipo] || [];
@@ -716,6 +730,7 @@ Verifica se está correto e envia novamente, ou fale *atendente* para falar com 
           ultimo_contato: new Date().toISOString(),
           estado_conversa: 'identificado'
         };
+        dados.ultima_mensagem = mensagemRecebida.substring(0, 200);
         await dbUpdate('ClienteWhatsapp', cliente.id, dados);
         cliente = { ...cliente, ...dados };
         await handleClienteIdentificado(cliente, telefone, mensagemRecebida);
@@ -897,7 +912,7 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
   // ── CONFIRMAR REINICIALIZAÇÃO: cliente voltou após chamado ─────────────────
   if (estado === 'chamado_aberto') {
     const msgNorm = mensagem.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
-    const voltou   = msgNorm.match(/voltou|voltei|reiniciei|reinicializei|liguei|desliguei|funcionou|ta funcionando|voltou internet|voltou a internet|sim|ok|pronto|feito/);
+    const voltou   = msgNorm.match(/voltou|voltei|reiniciei|reinicializei|liguei|desliguei|funcionou|ta funcionando|voltou internet|voltou a internet|sim|ok|pronto|feito|feito isso|fiz isso|desliguei|ja fiz|ja reiniciei/);
     const naoVoltou = msgNorm.match(/nao voltou|nao funcionou|ainda nao|continua|mesmo problema|nao resolveu|nada/);
 
     if (voltou) {
@@ -964,9 +979,26 @@ Responda *Sim* ou *Não* 😊`);
     }
   }
 
+  // ── Resolver contexto antes de classificar — 'sim/ok' ambíguo ──────────────
+  let mensagemEfetiva = mensagem;
+  const ultimaMsgCtx = cliente?.ultima_mensagem || '';
+  if (/^(sim|ok|s|yes|claro|pode|vai|pronto|feito)$/i.test(mensagem.trim()) && ultimaMsgCtx) {
+    // Transformar em mensagem descritiva baseada no contexto
+    if (ultimaMsgCtx.match(/reinici|deslig|roteador|tomada/i)) {
+      mensagemEfetiva = 'cliente confirmou que reiniciou o roteador';
+      console.log('[CTX] Resolvendo sim → confirmação reinicialização');
+    } else if (ultimaMsgCtx.match(/boleto|fatura|pagar|pix/i)) {
+      mensagemEfetiva = 'cliente confirma que quer o boleto';
+      console.log('[CTX] Resolvendo sim → boleto confirmado');
+    } else if (ultimaMsgCtx.match(/chamado|tecnico|equipe|visita/i)) {
+      mensagemEfetiva = 'cliente confirmou chamado técnico';
+      console.log('[CTX] Resolvendo sim → chamado confirmado');
+    }
+  }
+
   // ── Classificar intenção para ações que precisam de lógica especial ─────────
-  const intencao = await classificarIntencao(mensagem);
-  console.log('[INTENCAO]', intencao, '| estado:', estado, '| telefone:', telefone);
+  const intencao = await classificarIntencao(mensagemEfetiva);
+  console.log('[INTENCAO]', intencao, '| estado:', estado, '| telefone:', telefone, '| msgEfetiva:', mensagemEfetiva.substring(0,40));
 
   // ── Detecção de massiva ───────────────────────────────────────────────────
   if (intencao === 'suporte') {
@@ -1006,7 +1038,7 @@ Nossa equipe já foi acionada e está trabalhando na resolução.
   // ── Ações que precisam de integração (boleto, pagamento, suporte) ──────────
   if (intencao === 'boleto')            return handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente);
   if (intencao === 'pagou')             return handlePagou(cliente, telefone, nome, nomeCompleto, idCliente);
-  if (intencao === 'suporte')           return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
+  if (intencao === 'suporte')           return handleSuporte(cliente, telefone, mensagemEfetiva, nome, nomeCompleto, idCliente);
 
   // Se irritação média detectada e chegou até aqui → enriquecer resposta da IA com empatia
   if (detectarIrritacao(mensagem) === 'media' && intencao === 'duvida') {
@@ -1044,7 +1076,7 @@ Nossa equipe já foi acionada e está trabalhando na resolução.
   }
 
   // ── Para tudo mais (dúvidas, saudações, comercial, conversa) → IA conversacional ──
-  return handleIAConversacional(cliente, telefone, mensagem, nome, nomeCompleto, idCliente, intencao, cliente.mensagem_original_pre_cpf);
+  return handleIAConversacional(cliente, telefone, mensagemEfetiva, nome, nomeCompleto, idCliente, intencao, cliente.mensagem_original_pre_cpf);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1058,27 +1090,34 @@ async function handleIAConversacional(cliente, telefone, mensagem, nome, nomeCom
   if (intencao === 'pagou')  return handlePagou(cliente, telefone, nome, nomeCompleto, idCliente);
   if (intencao === 'suporte') return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
 
+  // Contexto de conversa: usar última_mensagem para resolver "sim/não" ambíguos
+  const ultimaMensagem = cliente?.ultima_mensagem || '';
+  const contextoConv = ultimaMensagem && ultimaMensagem !== mensagem
+    ? `
+Última mensagem do cliente (para contexto): "${ultimaMensagem}"`
+    : '';
+
   try {
     const prompt = `Você é um atendente virtual da PSIU TELECOM, empresa de internet por fibra óptica em Mogi Mirim e região (SP).
 
-PERSONALIDADE: Educado, natural, humano — como um atendente real no WhatsApp. Warm, direto, sem formalidades excessivas.
+PERSONALIDADE: Educado, natural, humano — como um atendente real no WhatsApp. Warm, direto, sem formalidades excessivas. Nunca robótico. Sempre que possível, use o nome do cliente de forma natural.
 
 CONTEXTO DO CLIENTE:
 - Nome: ${nomeCompleto}
 - É cliente cadastrado: sim
-- ID interno: ${idCliente || 'não localizado'}
+- ID interno: ${idCliente || 'não localizado'}${contextoConv}
 
-REGRAS:
-1. Se for saudação (oi, olá, bom dia, boa tarde): responda com calor e pergunte como pode ajudar, de forma natural. NÃO liste menus, NÃO use bullets/números com opções.
+REGRAS (NUNCA QUEBRE):
+1. Se for saudação (oi, olá, bom dia, boa tarde): responda com calor e pergunte como pode ajudar de forma NATURAL. Jamais liste menus ou opções numeradas.
 2. Se for dúvida técnica (fibra, modem, velocidade, etc.): explique de forma simples e didática.
-3. Se for pergunta sobre planos ou preços: diga que temos planos de fibra óptica e que um atendente pode passar os valores atualizados — ofereça conectar.
-4. Seja SEMPRE conciso: máximo 4 linhas por resposta.
-5. Se o cliente perguntar sobre conta, fatura ou pagamento, diga que vai verificar agora mesmo (o sistema vai buscar automaticamente).
-6. NÃO use listas numeradas ou bullet points com opções de menu.
-7. Use o nome do cliente naturalmente, mas não em toda frase.
-8. Responda em português informal e caloroso.
+3. Se for pergunta sobre planos ou preços: diga que temos planos de fibra óptica e que um atendente pode passar os valores atualizados.
+4. Seja SEMPRE conciso: máximo 3-4 linhas por resposta.
+5. Se o cliente perguntar sobre conta, fatura ou pagamento, diga que vai verificar agora mesmo.
+6. Jamais use listas numeradas ou bullet points — pareça humano de verdade.
+7. Se a mensagem atual for "sim" ou "ok" e houver contexto da última mensagem, responda de acordo com esse contexto — não pergunte de novo.
+8. Nunca repita o que você acabou de dizer ou pergunte a mesma coisa duas vezes.
 
-Mensagem do cliente: "${mensagem}"`;
+Mensagem atual do cliente: "${mensagem}"`;
 
     const res = await fetchWithTimeout('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -1180,6 +1219,9 @@ async function handleComercial(cliente, telefone, mensagem, nome) {
 async function handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente) {
   await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
 
+  // Proativo: avisar que está consultando antes de chamar a API
+  await enviarMensagem(telefone, respostaHumana('aguarde', nome));
+
   const cpf = cliente.cpf_cnpj ? cliente.cpf_cnpj.replace(/\D/g, '') : null;
   const dados = cpf ? await buscarClientePorCpf(cpf) : await buscarClientePorTelefone(telefone);
 
@@ -1215,6 +1257,9 @@ async function handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente) {
 
 async function handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente) {
   const luzVermelha = mensagem.toLowerCase().match(/luz vermelha|vermelho|piscando/);
+
+  // Proativo: avisar que está verificando ANTES de chamar a API (evita silêncio)
+  await enviarMensagem(telefone, respostaHumana('verificando_equip', nome));
 
   // Usar endpoint /verificar-acesso — retorna status: 1=online, 2=offline
   const acesso = await verificarAcesso(idCliente, telefone);
