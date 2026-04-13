@@ -371,6 +371,28 @@ function extrairDados(body) {
 // ═════════════════════════════════════════════════════════════════════════════
 // MÓDULO 6 — ESTADO E UTILITÁRIOS
 // ═════════════════════════════════════════════════════════════════════════════
+function respostaHumana(tipo, nome) {
+  const r = {
+    aguarde: [
+      `Só um instante que já estou verificando pra você... 👀`,
+      `Aguarda um pouquinho, já vejo isso aqui 🔍`,
+      `Deixa comigo, já estou checando... ⚙️`
+    ],
+    saudacao: [
+      `Oi, *${nome}*! Tudo bem? 😊`,
+      `Olá, *${nome}*! Vamos resolver isso! 👍`,
+      `Fala, *${nome}*! Como posso te ajudar? 😄`
+    ],
+    chamado_aberto: [
+      `Já abri o chamado aqui pra você, *${nome}*! Nossa equipe vai verificar 🔧`,
+      `Chamado registrado, *${nome}*! A equipe técnica já foi acionada 🛠️`,
+      `Pronto, *${nome}*! Chamado aberto e equipe notificada 📋`
+    ]
+  };
+  const lista = r[tipo] || [];
+  return lista.length ? lista[Math.floor(Math.random() * lista.length)] : '';
+}
+
 function detectarIrritacao(msg) {
   if (!msg) return false;
   const m = msg.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -675,7 +697,8 @@ Verifica se está correto e envia novamente, ou fale *atendente* para falar com 
         await dbUpdate('ClienteWhatsapp', cliente.id, { identificado: true, estado_conversa: 'identificado' });
         cliente = { ...cliente, identificado: true, estado_conversa: 'identificado' };
       }
-      await dbUpdate('ClienteWhatsapp', cliente.id, { ultimo_contato: new Date().toISOString() });
+      await dbUpdate('ClienteWhatsapp', cliente.id, { ultimo_contato: new Date().toISOString(), ultima_mensagem: mensagemRecebida.substring(0, 200) });
+      cliente = { ...cliente, ultima_mensagem: mensagemRecebida };
       await handleClienteIdentificado(cliente, telefone, mensagemRecebida);
       return;
     }
@@ -869,6 +892,48 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
     await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
     cliente = { ...cliente, estado_conversa: 'identificado' };
     estado = 'identificado';
+  }
+
+  // ── CONFIRMAR REINICIALIZAÇÃO: cliente voltou após chamado ─────────────────
+  if (estado === 'chamado_aberto') {
+    const msgNorm = mensagem.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const voltou   = msgNorm.match(/voltou|voltei|reiniciei|reinicializei|liguei|desliguei|funcionou|ta funcionando|voltou internet|voltou a internet|sim|ok|pronto|feito/);
+    const naoVoltou = msgNorm.match(/nao voltou|nao funcionou|ainda nao|continua|mesmo problema|nao resolveu|nada/);
+
+    if (voltou) {
+      // Verificar se realmente voltou via API
+      const acesso = await verificarAcesso(idCliente, telefone);
+      if (acesso?.status === 1) {
+        await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+        // Baixa automática no chamado aberto
+        try {
+          const abertos = await dbFilter('Atendimento', { telefone, limit: 10 });
+          const lista = Array.isArray(abertos) ? abertos : [];
+          for (const at of lista.filter(a => a.estado_final === 'chamado_aberto' && !a.resolvido)) {
+            await dbUpdate('Atendimento', at.id, { estado_final: 'resolvido', resolvido: true });
+          }
+        } catch {}
+        await enviarMensagem(telefone, `Ótimo, *${nome}*! Confirmei aqui que sua conexão está online novamente ✅
+
+Qualquer coisa é só chamar! 😊`);
+        return;
+      } else {
+        await enviarMensagem(telefone, `*${nome}*, ainda estou vendo instabilidade aqui no sistema 😕
+
+Nossa equipe já está verificando. Te aviso assim que resolver! Se piorar, manda mensagem.`);
+        return;
+      }
+    }
+
+    if (naoVoltou) {
+      await enviarMensagem(telefone, `Entendido, *${nome}* 😕 Nossa equipe técnica está no caso. Já alertei como prioritário!
+
+Se não resolver em breve, você quer que eu agende uma visita técnica?`);
+      await alertarRafa('⚡', 'CHAMADO SEM RESOLUÇÃO', nomeCompleto, telefone, `Cliente diz que não resolveu após chamado aberto.`);
+      return;
+    }
+
+    // Qualquer outra coisa com chamado aberto → IA conversacional
   }
 
   // ── MODO SILÊNCIO: atendimento humano ativo ────────────────────────────────
