@@ -115,7 +115,19 @@ function ehCpfOuCnpj(texto) {
 const buscarClientePorTelefone = (phone) => { const phoneSem55 = phone.startsWith('55') ? phone.slice(2) : phone; return receitanetPost('clientes', { phone: phoneSem55 }); };
 const buscarClientePorCpf      = (cpfcnpj)   => receitanetPost('clientes', { cpfcnpj: cpfcnpj.replace(/\D/g, '') });
 const buscarClientePorId       = (idCliente) => receitanetPost('clientes', { idCliente });
-const abrirChamado             = (idCliente, contato, descricao) => receitanetPost('abertura-chamado', { idCliente, contato, ocorrenciatipo: 1, motivoos: 1, descricao: descricao || 'Chamado aberto via chatbot' });
+const abrirChamado             = (idCliente, contato, descricao) => {
+  const desc = descricao || 'Chamado aberto via chatbot';
+  return receitanetPost('abertura-chamado', {
+    idCliente,
+    contato,
+    ocorrenciatipo: 1,
+    motivoos: 1,
+    servicos: desc,
+    obs: desc,
+    descricao: desc,
+    observacao: desc
+  });
+};
 const verificarAcesso          = (idCliente, contato) => receitanetPost('verificar-acesso', { idCliente, contato });
 const notificacaoPagamento     = (idCliente, contato) => receitanetPost('notificacao-pagamento', { idCliente, contato });
 
@@ -372,21 +384,35 @@ function extrairDados(body) {
 // MÓDULO 6 — ESTADO E UTILITÁRIOS
 // ═════════════════════════════════════════════════════════════════════════════
 function respostaHumana(tipo, nome) {
+  const n = nome || 'cliente';
   const r = {
     aguarde: [
       `Só um instante que já estou verificando pra você... 👀`,
       `Aguarda um pouquinho, já vejo isso aqui 🔍`,
-      `Deixa comigo, já estou checando... ⚙️`
+      `Deixa comigo, já estou checando... ⚙️`,
+      `Um momento, deixa eu verificar aqui pra você! 🔧`,
+      `Já estou olhando isso aqui... um segundo! 👨‍💻`
     ],
     saudacao: [
-      `Oi, *${nome}*! Tudo bem? 😊`,
-      `Olá, *${nome}*! Vamos resolver isso! 👍`,
-      `Fala, *${nome}*! Como posso te ajudar? 😄`
+      `Oi, *${n}*! Tudo bem? 😊`,
+      `Olá, *${n}*! Como posso te ajudar hoje? 🤝`,
+      `Fala, *${n}*! Vamos resolver isso! 👍`,
+      `Oi, *${n}*! O que posso fazer por você? 😊`
     ],
     chamado_aberto: [
-      `Já abri o chamado aqui pra você, *${nome}*! Nossa equipe vai verificar 🔧`,
-      `Chamado registrado, *${nome}*! A equipe técnica já foi acionada 🛠️`,
-      `Pronto, *${nome}*! Chamado aberto e equipe notificada 📋`
+      `Já abri o chamado pra você, *${n}*! Nossa equipe vai verificar 🔧`,
+      `Chamado registrado, *${n}*! A equipe técnica já foi acionada 🛠️`,
+      `Pronto, *${n}*! Equipe notificada e já está de olho 📋`
+    ],
+    verificando_equip: [
+      `Estou verificando o status do seu equipamento agora, *${n}*... ⏳`,
+      `Deixa eu checar sua conexão aqui no sistema, *${n}*! 🔍`,
+      `Um segundo, *${n}*! Estou olhando o status da sua rede... 📡`
+    ],
+    empatia: [
+      `Entendo, *${n}*! Isso é bem chato mesmo. Deixa comigo 🙏`,
+      `Puxa, *${n}*, sinto muito por isso. Vamos resolver agora! 💪`,
+      `Entendido, *${n}*! Vou priorizar isso pra você agora 🔥`
     ]
   };
   const lista = r[tipo] || [];
@@ -682,10 +708,14 @@ Vou te colocar em *prioridade máxima* com um atendente agora para resolver isso
             ultimo_contato: new Date().toISOString(),
             estado_conversa: 'aguardando_cpf'
           });
+        } else {
+          // Garantir que o estado seja aguardando_cpf para o próximo ciclo cair aqui de novo
+          await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_cpf', ultimo_contato: new Date().toISOString() });
+          cliente = { ...cliente, estado_conversa: 'aguardando_cpf' };
         }
         await enviarMensagem(telefone, `Não encontrei cadastro com esse CPF/CNPJ. 😕
 
-Verifica se está correto e envia novamente, ou fale *atendente* para falar com nossa equipe!`);
+Verifica se o número está correto e tente novamente, ou fale *atendente* para falar com nossa equipe!`);
         return;
       }
     }
@@ -716,6 +746,7 @@ Verifica se está correto e envia novamente, ou fale *atendente* para falar com 
           ultimo_contato: new Date().toISOString(),
           estado_conversa: 'identificado'
         };
+        dados.ultima_mensagem = mensagemRecebida.substring(0, 200);
         await dbUpdate('ClienteWhatsapp', cliente.id, dados);
         cliente = { ...cliente, ...dados };
         await handleClienteIdentificado(cliente, telefone, mensagemRecebida);
@@ -794,33 +825,14 @@ Verifica se está correto e envia novamente, ou fale *atendente* para falar com 
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// MÓDULO 8 — IDENTIFICAÇÃO POR CPF
+// MÓDULO 8 — IDENTIFICAÇÃO POR CPF (com contexto de intenção)
 // ═════════════════════════════════════════════════════════════════════════════
 async function handleIdentificacaoPorCpf(cliente, telefone, mensagem) {
-  const intencao = await classificarIntencao(mensagem);
   const cpf = mensagem.replace(/\D/g, '');
 
-  // Atualizar mensagem original se nova mensagem não for CPF (cliente ainda explorando)
-  const cpfCheck = mensagem.replace(/\D/g, '');
-
-  // Se a mensagem é SOMENTE números com 11+ dígitos, tratar como CPF/CNPJ direto
-  // (evita o bot perguntar "o que é isso?" quando cliente manda CPF sem formatação)
-  const soSoNumeros = /^\d[\d.\-\/\s]+$/.test(mensagem.trim());
-  if (soSoNumeros && cpfCheck.length >= 11 && cpfCheck.length <= 14) {
-    // Cai direto na busca por CPF abaixo — não vai para IA conversacional
-    console.log('[CPF] Detectado número puro como CPF/CNPJ:', cpfCheck.substring(0, 14));
-  } else if (cpfCheck.length < 11 && cliente.estado_conversa === 'aguardando_cpf') {
-    // Mensagem não parece CPF — atualizar mensagem original se fizer sentido
-    const naoEhCPF = mensagem.length > 5 && !/^\d/.test(mensagem.trim());
-    if (naoEhCPF && (!cliente.mensagem_original_pre_cpf || cliente.mensagem_original_pre_cpf.length < mensagem.length)) {
-      await dbUpdate('ClienteWhatsapp', cliente.id, { mensagem_original_pre_cpf: mensagem });
-      cliente = { ...cliente, mensagem_original_pre_cpf: mensagem };
-      console.log('[CPF] Mensagem original atualizada:', mensagem.substring(0, 60));
-    }
-  }
-
-  // Se veio um CPF/CNPJ válido — tentar identificar
+  // ── 1. Detectar se a mensagem É um CPF/CNPJ ───────────────────────────────
   if (cpf.length >= 11 && cpf.length <= 14) {
+    console.log('[CPF] Recebido CPF/CNPJ:', cpf.substring(0, 14));
     const resultado = await buscarClientePorCpf(cpf);
     if (resultado.success && resultado.contratos?.idCliente) {
       const dados = {
@@ -831,54 +843,108 @@ async function handleIdentificacaoPorCpf(cliente, telefone, mensagem) {
         identificado: true,
         ultimo_contato: new Date().toISOString(),
         estado_conversa: 'identificado',
-        mensagem_original_pre_cpf: null  // limpar contexto de identificação
+        mensagem_original_pre_cpf: null
       };
       const msgOriginal = cliente.mensagem_original_pre_cpf || mensagem;
       await dbUpdate('ClienteWhatsapp', cliente.id, dados);
       cliente = { ...cliente, ...dados };
-      console.log('[CPF] mensagem original para orquestrador:', msgOriginal.substring(0, 80));
+      console.log('[CPF] Identificado! Redirecionando para intenção original:', msgOriginal.substring(0, 80));
       await handleClienteIdentificado(cliente, telefone, msgOriginal);
       return;
     } else {
-      await enviarMensagem(telefone, `Não encontrei cadastro com esse CPF/CNPJ. 😕\n\nVerifica se está correto. Se preferir, nossa equipe pode te ajudar por aqui mesmo!`);
+      // CPF não encontrado
+      await enviarMensagem(telefone,
+        `Não encontrei cadastro com esse CPF/CNPJ. 😕\n\n` +
+        `Verifica se está correto. Se preferir, nossa equipe pode te ajudar: basta digitar *atendente*!`
+      );
       return;
     }
   }
 
-  // Dúvida geral — responder sem pedir CPF
+  // ── 2. Mensagem NÃO é CPF → classificar intenção primeiro ─────────────────
+  const intencao = await classificarIntencao(mensagem);
+  console.log('[CPF_INTENT]', intencao, '| estado:', cliente.estado_conversa, '| msg:', mensagem.substring(0, 50));
+
+  // Salvar mensagem original para usar depois que identificar
+  const jaTemMsgOriginal = !!cliente.mensagem_original_pre_cpf;
+  if (!jaTemMsgOriginal) {
+    await dbUpdate('ClienteWhatsapp', cliente.id, { mensagem_original_pre_cpf: mensagem });
+    cliente = { ...cliente, mensagem_original_pre_cpf: mensagem };
+  }
+
+  // ── Quer falar com atendente ───────────────────────────────────────────────
+  if (intencao === 'atendente' || /atendente|humano|pessoa real|falar com/i.test(mensagem)) {
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'atendente_novo_cliente' });
+    await enviarMensagem(telefone,
+      `Tudo bem! 😊 Vou te passar para um atendente.\n\n` +
+      `Nosso horário é *seg-sex das 9h às 20h*. Em breve alguém te responde!`
+    );
+    await registrarAtendimento(telefone, 'Cliente não identificado', null, 'novo_cliente', mensagem, 'encaminhado_atendente', false);
+    return;
+  }
+
+  // ── Dúvida geral (sem precisar de cadastro) ───────────────────────────────
   if (intencao === 'duvida') {
     return handleDuvida(cliente, telefone, mensagem, null);
   }
 
-  // Interesse comercial — encaminhar para equipe sem pedir CPF
+  // ── Interesse comercial (quer contratar) ──────────────────────────────────
   if (intencao === 'comercial') {
     return handleComercial(cliente, telefone, mensagem, null);
   }
 
-  // Quer contratar — encaminhar direto para atendente
-  if (intencao === 'atendente') {
-    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'atendente_novo_cliente' });
-    await registrarAtendimento(telefone, 'Novo Cliente', null, 'novo_cliente', mensagem, 'encaminhado_atendente', false);
-    const msg = atendenteDisponivel()
-      ? `Olá! 👋 Que ótimo que você quer conhecer a PSIU!\n\nVou te conectar com nosso time agora. Um atendente entrará em contato em breve! 😊`
-      : `Olá! 👋 Que ótimo que você quer conhecer a PSIU!\n\nNosso horário de atendimento é *seg-sex das 9h às 20h*. Assim que nossa equipe chegar, entraremos em contato! 😊`;
-    await enviarMensagem(telefone, msg);
-    await alertarRafa('🆕', 'NOVO CLIENTE INTERESSADO', 'Novo Cliente', telefone, `📲 Quer contratar a PSIU! Entre em contato.`);
+  // ── INTENÇÃO ESPECÍFICA → pedir CPF de forma CONTEXTUAL (não genérica) ────
+  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_cpf', ultimo_contato: new Date().toISOString() });
+
+  // Mensagem personalizada por intenção — humanizada e direta
+  if (intencao === 'pagou') {
+    await enviarMensagem(telefone,
+      `Entendi! 👍 Se você já realizou o pagamento, pode ser que ainda esteja em processamento.\n\n` +
+      `Para eu verificar certinho pra você, pode me informar seu *CPF ou CNPJ*? 😊`
+    );
     return;
   }
 
-  // Qualquer outra mensagem (inclusive "já sou cliente", "boleto", "suporte")
-  // → pedir CPF para identificar (sem reiniciar com boas-vindas se já está esperando CPF)
-  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_cpf', ultimo_contato: new Date().toISOString() });
-  if (cliente.estado_conversa === 'aguardando_cpf') {
-    // Já pediu antes — mensagem mais direta
-    await enviarMensagem(telefone, `Pode me enviar seu *CPF ou CNPJ* (só os números) para eu te localizar no sistema 😊`);
-  } else {
-    await enviarMensagem(telefone, `Olá! 👋 Bem-vindo(a) à *PSIU TELECOM*!\n\nNão encontrei seu número no cadastro. Me passa seu *CPF ou CNPJ* para eu te localizar 😊\n\nSe quiser contratar nossos serviços, é só dizer!`);
+  if (intencao === 'boleto') {
+    await enviarMensagem(telefone,
+      `Claro, vou te ajudar com isso! 💰\n\n` +
+      `Para localizar sua fatura, preciso do seu *CPF ou CNPJ* (só os números). Pode mandar? 😊`
+    );
+    return;
   }
+
+  if (intencao === 'suporte') {
+    await enviarMensagem(telefone,
+      `Que chato, vou te ajudar agora! 🔧\n\n` +
+      `Só preciso te localizar no sistema primeiro. Me passa seu *CPF ou CNPJ*? (pode ser só os números)`
+    );
+    return;
+  }
+
+  if (intencao === 'cancelamento') {
+    await enviarMensagem(telefone,
+      `Entendido. 😔 Para eu verificar seu cadastro e te ajudar com isso, preciso do seu *CPF ou CNPJ*.\n\n` +
+      `Pode me passar?`
+    );
+    return;
+  }
+
+  // Já está esperando CPF (segunda mensagem sem CPF) → mensagem mais direta
+  if (cliente.estado_conversa === 'aguardando_cpf') {
+    await enviarMensagem(telefone,
+      `Pode me enviar seu *CPF ou CNPJ* (só os números) para eu te localizar no sistema? 😊`
+    );
+    return;
+  }
+
+  // Primeiro contato genérico
+  await enviarMensagem(telefone,
+    `Olá! 👋 Aqui é a *PSIU TELECOM*.\n\n` +
+    `Para te ajudar, preciso localizar seu cadastro. Pode me passar seu *CPF ou CNPJ*? 😊\n\n` +
+    `Se quiser falar com um atendente, é só digitar *atendente*!`
+  );
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
 // MÓDULO 9 — ORQUESTRADOR IA CONVERSACIONAL (cliente identificado)
 // ═════════════════════════════════════════════════════════════════════════════
 async function handleClienteIdentificado(cliente, telefone, mensagem) {
@@ -894,10 +960,75 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
     estado = 'identificado';
   }
 
+  // ── AGUARDANDO REINÍCIO: cliente pediu para reiniciar e está esperando resposta ──
+  if (estado === 'aguardando_reinicio') {
+    const msgNorm = mensagem.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const voltou  = msgNorm.match(/voltei|voltou|reiniciei|reinicializei|liguei|funcionou|ta funcionando|voltou a internet|voltou internet|sim|ok|pronto|feito|ja fiz|fiz isso/);
+    const naoVoltou = msgNorm.match(/nao voltou|nao funcionou|ainda nao|continua|mesmo problema|nao resolveu|nada|nao|n$/);
+
+    if (voltou) {
+      await enviarMensagem(telefone, `Perfeito, *${nome}*! Vou verificar novamente sua conexão... 🔄`);
+      const acesso2 = await verificarAcesso(idCliente, telefone);
+
+      if (acesso2?.status === 1) {
+        // ✅ Voltou! Fechar sem abrir chamado
+        await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+        await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'resolvido', true);
+        await enviarMensagem(telefone, `Ótimo, *${nome}*! ✅ Sua conexão está *online* e normalizada!
+
+Se precisar de mais alguma coisa é só chamar 😊`);
+        console.log('[REINICIO] Resolvido sem chamado para', telefone);
+        return;
+      } else {
+        // ❌ Ainda offline → agora sim abre chamado
+        const descricaoOS = `Equipamento offline após reinicialização. Cliente confirmou reinício mas conexão não voltou.`;
+        const chamado2 = await abrirChamado(idCliente, telefone, descricaoOS);
+        const protocolo2 = chamado2.protocolo || chamado2.idSuporte || 'gerado';
+        await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'chamado_aberto' });
+        await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'chamado_aberto', false);
+        await enviarMensagem(telefone, `*${nome}*, ainda não normalizou 😕
+
+Abri um chamado técnico para nossa equipe verificar presencialmente.
+
+📋 *Protocolo: ${protocolo2}*
+
+Guarde esse número! Nossa equipe entrará em contato em breve.`);
+        await alertarRafa('🔴', 'NÃO VOLTOU APÓS REINÍCIO', nomeCompleto, telefone, `Reiniciou mas não voltou. Chamado aberto.
+📋 Protocolo: ${protocolo2}`);
+        return;
+      }
+    }
+
+    if (naoVoltou) {
+      // Não tentou reiniciar ou confirmou que não voltou → chamado imediato
+      const descricaoOS2 = `Equipamento offline. Cliente informou que não voltou após tentativa de reinicialização.`;
+      const chamado3 = await abrirChamado(idCliente, telefone, descricaoOS2);
+      const protocolo3 = chamado3.protocolo || chamado3.idSuporte || 'gerado';
+      await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'chamado_aberto' });
+      await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'chamado_aberto', false);
+      await enviarMensagem(telefone, `Entendido, *${nome}* 😕
+
+Abri um chamado técnico com prioridade para nossa equipe ir até você!
+
+📋 *Protocolo: ${protocolo3}*
+
+Guarde esse número. Nossa equipe entrará em contato em breve!`);
+      await alertarRafa('🔴', 'CHAMADO DE CAMPO', nomeCompleto, telefone, `Cliente confirmou que não voltou após reinício.
+📋 Protocolo: ${protocolo3}`);
+      return;
+    }
+
+    // Mensagem ambígua no estado aguardando_reinicio → lembrar de reiniciar
+    await enviarMensagem(telefone, `*${nome}*, conseguiu reiniciar o roteador? Basta desligar da tomada por 30 segundos e ligar de volta 🔌
+
+Me avisa quando fizer! 😊`);
+    return;
+  }
+
   // ── CONFIRMAR REINICIALIZAÇÃO: cliente voltou após chamado ─────────────────
   if (estado === 'chamado_aberto') {
     const msgNorm = mensagem.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
-    const voltou   = msgNorm.match(/voltou|voltei|reiniciei|reinicializei|liguei|desliguei|funcionou|ta funcionando|voltou internet|voltou a internet|sim|ok|pronto|feito/);
+    const voltou   = msgNorm.match(/voltou|voltei|reiniciei|reinicializei|liguei|desliguei|funcionou|ta funcionando|voltou internet|voltou a internet|sim|ok|pronto|feito|feito isso|fiz isso|desliguei|ja fiz|ja reiniciei/);
     const naoVoltou = msgNorm.match(/nao voltou|nao funcionou|ainda nao|continua|mesmo problema|nao resolveu|nada/);
 
     if (voltou) {
@@ -964,9 +1095,26 @@ Responda *Sim* ou *Não* 😊`);
     }
   }
 
+  // ── Resolver contexto antes de classificar — 'sim/ok' ambíguo ──────────────
+  let mensagemEfetiva = mensagem;
+  const ultimaMsgCtx = cliente?.ultima_mensagem || '';
+  if (/^(sim|ok|s|yes|claro|pode|vai|pronto|feito)$/i.test(mensagem.trim()) && ultimaMsgCtx) {
+    // Transformar em mensagem descritiva baseada no contexto
+    if (ultimaMsgCtx.match(/reinici|deslig|roteador|tomada/i)) {
+      mensagemEfetiva = 'cliente confirmou que reiniciou o roteador';
+      console.log('[CTX] Resolvendo sim → confirmação reinicialização');
+    } else if (ultimaMsgCtx.match(/boleto|fatura|pagar|pix/i)) {
+      mensagemEfetiva = 'cliente confirma que quer o boleto';
+      console.log('[CTX] Resolvendo sim → boleto confirmado');
+    } else if (ultimaMsgCtx.match(/chamado|tecnico|equipe|visita/i)) {
+      mensagemEfetiva = 'cliente confirmou chamado técnico';
+      console.log('[CTX] Resolvendo sim → chamado confirmado');
+    }
+  }
+
   // ── Classificar intenção para ações que precisam de lógica especial ─────────
-  const intencao = await classificarIntencao(mensagem);
-  console.log('[INTENCAO]', intencao, '| estado:', estado, '| telefone:', telefone);
+  const intencao = await classificarIntencao(mensagemEfetiva);
+  console.log('[INTENCAO]', intencao, '| estado:', estado, '| telefone:', telefone, '| msgEfetiva:', mensagemEfetiva.substring(0,40));
 
   // ── Detecção de massiva ───────────────────────────────────────────────────
   if (intencao === 'suporte') {
@@ -1006,7 +1154,7 @@ Nossa equipe já foi acionada e está trabalhando na resolução.
   // ── Ações que precisam de integração (boleto, pagamento, suporte) ──────────
   if (intencao === 'boleto')            return handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente);
   if (intencao === 'pagou')             return handlePagou(cliente, telefone, nome, nomeCompleto, idCliente);
-  if (intencao === 'suporte')           return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
+  if (intencao === 'suporte')           return handleSuporte(cliente, telefone, mensagemEfetiva, nome, nomeCompleto, idCliente);
 
   // Se irritação média detectada e chegou até aqui → enriquecer resposta da IA com empatia
   if (detectarIrritacao(mensagem) === 'media' && intencao === 'duvida') {
@@ -1034,17 +1182,19 @@ Nossa equipe já foi acionada e está trabalhando na resolução.
   if (intencao === 'verificar_conexao') {
     const acesso = await verificarAcesso(idCliente, telefone);
     if (acesso?.status === 1) {
+      await registrarAtendimento(telefone, nomeCompleto, idCliente, 'verificar_conexao', mensagemEfetiva, 'resolvido', true);
       await enviarMensagem(telefone, `*${nome}*, acabei de verificar: seu equipamento está *online* ✅\n\nSe ainda estiver com lentidão, tenta reiniciar o roteador: desliga da tomada por 30 segundos e liga de novo. Se persistir, abro um chamado! 🔧`);
     } else if (acesso?.status === 2) {
       return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
     } else {
+      await registrarAtendimento(telefone, nomeCompleto, idCliente, 'verificar_conexao', mensagemEfetiva, 'em_andamento', false);
       await enviarMensagem(telefone, `*${nome}*, não consegui verificar o status agora. Se estiver com problema de internet me diga que abro um chamado técnico! 🔧`);
     }
     return;
   }
 
   // ── Para tudo mais (dúvidas, saudações, comercial, conversa) → IA conversacional ──
-  return handleIAConversacional(cliente, telefone, mensagem, nome, nomeCompleto, idCliente, intencao, cliente.mensagem_original_pre_cpf);
+  return handleIAConversacional(cliente, telefone, mensagemEfetiva, nome, nomeCompleto, idCliente, intencao, cliente.mensagem_original_pre_cpf);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1058,27 +1208,37 @@ async function handleIAConversacional(cliente, telefone, mensagem, nome, nomeCom
   if (intencao === 'pagou')  return handlePagou(cliente, telefone, nome, nomeCompleto, idCliente);
   if (intencao === 'suporte') return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
 
+  // Registrar atendimento para qualquer interação via IA conversacional
+  await registrarAtendimento(telefone, nomeCompleto, idCliente, intencao || 'duvida', mensagem, 'resolvido', true);
+
+  // Contexto de conversa: usar última_mensagem para resolver "sim/não" ambíguos
+  const ultimaMensagem = cliente?.ultima_mensagem || '';
+  const contextoConv = ultimaMensagem && ultimaMensagem !== mensagem
+    ? `
+Última mensagem do cliente (para contexto): "${ultimaMensagem}"`
+    : '';
+
   try {
     const prompt = `Você é um atendente virtual da PSIU TELECOM, empresa de internet por fibra óptica em Mogi Mirim e região (SP).
 
-PERSONALIDADE: Educado, natural, humano — como um atendente real no WhatsApp. Warm, direto, sem formalidades excessivas.
+PERSONALIDADE: Educado, natural, humano — como um atendente real no WhatsApp. Warm, direto, sem formalidades excessivas. Nunca robótico. Sempre que possível, use o nome do cliente de forma natural.
 
 CONTEXTO DO CLIENTE:
 - Nome: ${nomeCompleto}
 - É cliente cadastrado: sim
-- ID interno: ${idCliente || 'não localizado'}
+- ID interno: ${idCliente || 'não localizado'}${contextoConv}
 
-REGRAS:
-1. Se for saudação (oi, olá, bom dia, boa tarde): responda com calor e pergunte como pode ajudar, de forma natural. NÃO liste menus, NÃO use bullets/números com opções.
+REGRAS (NUNCA QUEBRE):
+1. Se for saudação (oi, olá, bom dia, boa tarde): responda com calor e pergunte como pode ajudar de forma NATURAL. Jamais liste menus ou opções numeradas.
 2. Se for dúvida técnica (fibra, modem, velocidade, etc.): explique de forma simples e didática.
-3. Se for pergunta sobre planos ou preços: diga que temos planos de fibra óptica e que um atendente pode passar os valores atualizados — ofereça conectar.
-4. Seja SEMPRE conciso: máximo 4 linhas por resposta.
-5. Se o cliente perguntar sobre conta, fatura ou pagamento, diga que vai verificar agora mesmo (o sistema vai buscar automaticamente).
-6. NÃO use listas numeradas ou bullet points com opções de menu.
-7. Use o nome do cliente naturalmente, mas não em toda frase.
-8. Responda em português informal e caloroso.
+3. Se for pergunta sobre planos ou preços: diga que temos planos de fibra óptica e que um atendente pode passar os valores atualizados.
+4. Seja SEMPRE conciso: máximo 3-4 linhas por resposta.
+5. Se o cliente perguntar sobre conta, fatura ou pagamento, diga que vai verificar agora mesmo.
+6. Jamais use listas numeradas ou bullet points — pareça humano de verdade.
+7. Se a mensagem atual for "sim" ou "ok" e houver contexto da última mensagem, responda de acordo com esse contexto — não pergunte de novo.
+8. Nunca repita o que você acabou de dizer ou pergunte a mesma coisa duas vezes.
 
-Mensagem do cliente: "${mensagem}"`;
+Mensagem atual do cliente: "${mensagem}"`;
 
     const res = await fetchWithTimeout('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -1180,6 +1340,9 @@ async function handleComercial(cliente, telefone, mensagem, nome) {
 async function handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente) {
   await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
 
+  // Proativo: avisar que está consultando antes de chamar a API
+  await enviarMensagem(telefone, respostaHumana('aguarde', nome));
+
   const cpf = cliente.cpf_cnpj ? cliente.cpf_cnpj.replace(/\D/g, '') : null;
   const dados = cpf ? await buscarClientePorCpf(cpf) : await buscarClientePorTelefone(telefone);
 
@@ -1216,6 +1379,9 @@ async function handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente) {
 async function handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente) {
   const luzVermelha = mensagem.toLowerCase().match(/luz vermelha|vermelho|piscando/);
 
+  // Proativo: avisar que está verificando ANTES de chamar a API (evita silêncio)
+  await enviarMensagem(telefone, respostaHumana('verificando_equip', nome));
+
   // Usar endpoint /verificar-acesso — retorna status: 1=online, 2=offline
   const acesso = await verificarAcesso(idCliente, telefone);
   const statusAcesso = acesso?.status; // 1=online, 2=offline, undefined=erro
@@ -1230,26 +1396,47 @@ async function handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, id
   else if (equipOnline)  tipoProblema = 'Equipamento online mas cliente sem internet — instabilidade';
   const descricaoOS = `${tipoProblema}. Mensagem do cliente: "${mensagem.substring(0, 150)}"`;
 
-  const chamado   = await abrirChamado(idCliente, telefone, descricaoOS);
-  const protocolo = chamado.protocolo || chamado.idSuporte || 'gerado';
-
-  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'chamado_aberto' });
-  await registrarAtendimento(telefone, nomeCompleto, idCliente, luzVermelha ? 'suporte_campo' : 'suporte', mensagem, 'chamado_aberto', false);
-
+  // 🔴 Luz vermelha = fibra com problema = chamado direto, sem pedir reinício
   if (luzVermelha) {
-    await enviarMensagem(telefone, `*${nome}*, luz vermelha indica um problema na fibra que precisamos verificar presencialmente. 🔴\n\nJá abri um chamado técnico para visita! Nossa equipe entrará em contato em breve.\n\n📋 *Protocolo: ${protocolo}*\n\nGuarde esse número para acompanhar seu atendimento.`);
-    await alertarRafa('🔴', 'CHAMADO DE CAMPO', nomeCompleto, telefone, `⚠️ Luz vermelha — falha na fibra!\n📋 Protocolo: ${protocolo}`);
-  } else if (equipOnline) {
-    await enviarMensagem(telefone, `*${nome}*, seu equipamento aparece *online* no nosso sistema. Pode ser instabilidade momentânea. 🔄\n\nTenta reiniciar o roteador: *desliga da tomada por 30 segundos e liga novamente.*\n\nJá abri um chamado técnico! 🔧\n📋 *Protocolo: ${protocolo}*\n\nNossa equipe vai verificar remotamente. Guarde esse número!`);
-    await alertarRafa('🟡', 'CHAMADO TÉCNICO', nomeCompleto, telefone, `Equipamento *online* mas cliente sem internet.\n📋 Protocolo: ${protocolo}`);
-  } else if (equipOffline) {
-    await enviarMensagem(telefone, `*${nome}*, seu equipamento está *offline* no nosso sistema. 📡\n\nTenta reiniciar: *desliga o roteador da tomada por 30 segundos e liga novamente.*\n\nJá abri um chamado técnico! 🔧\n📋 *Protocolo: ${protocolo}*\n\nSe não resolver em 30 minutos, nossa equipe entra em contato. Guarde esse número!`);
-    await alertarRafa('🔴', 'CHAMADO DE CAMPO', nomeCompleto, telefone, `Equipamento *offline*.\n📋 Protocolo: ${protocolo}`);
-  } else {
-    // Não foi possível verificar status — mensagem neutra
-    await enviarMensagem(telefone, `*${nome}*, já abri um chamado técnico para nossa equipe verificar! 🔧\n\nEnquanto isso, tenta reiniciar o roteador: *desliga da tomada por 30 segundos e liga novamente.*\n\n📋 *Protocolo: ${protocolo}*\n\nGuarde esse número para acompanhar seu atendimento.`);
-    await alertarRafa('🟡', 'CHAMADO TÉCNICO', nomeCompleto, telefone, `Status do equipamento não disponível.\n📋 Protocolo: ${protocolo}`);
+    const chamadoLv = await abrirChamado(idCliente, telefone, descricaoOS);
+    const protocoloLv = chamadoLv.protocolo || chamadoLv.idSuporte || 'gerado';
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'chamado_aberto' });
+    await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte_campo', mensagem, 'chamado_aberto', false);
+    await enviarMensagem(telefone, `*${nome}*, luz vermelha indica um problema na fibra que precisamos verificar presencialmente. 🔴
+
+Já abri um chamado técnico para visita! Nossa equipe entrará em contato em breve.
+
+📋 *Protocolo: ${protocoloLv}*
+
+Guarde esse número para acompanhar seu atendimento.`);
+    await alertarRafa('🔴', 'CHAMADO DE CAMPO', nomeCompleto, telefone, `⚠️ Luz vermelha — falha na fibra!
+📋 Protocolo: ${protocoloLv}`);
+    return;
   }
+
+  // 🟡/🔴 Online ou offline sem luz vermelha → pede reinício ANTES de abrir chamado
+  if (equipOnline) {
+    await enviarMensagem(telefone, `*${nome}*, seu equipamento aparece *online* no nosso sistema, mas pode estar com instabilidade. 🔄
+
+Pode *desligar o roteador da tomada por 30 segundos* e ligar novamente? Me avisa quando fizer 😊`);
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_reinicio' });
+    await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'em_andamento', false);
+    return;
+  }
+
+  if (equipOffline) {
+    await enviarMensagem(telefone, `*${nome}*, seu equipamento está *offline* no nosso sistema. 📡
+
+Vamos tentar resolver rapidinho! Pode *desligar o roteador da tomada por 30 segundos* e ligar novamente? Me avisa quando fizer 😊`);
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_reinicio' });
+    await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'em_andamento', false);
+    return;
+  }
+
+  // Status desconhecido → pede reinício também (melhor tentar antes de abrir chamado)
+  await enviarMensagem(telefone, `*${nome}*, vamos tentar resolver isso! Pode *desligar o roteador da tomada por 30 segundos* e ligar novamente? Me avisa quando fizer 😊`);
+  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_reinicio' });
+  await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'em_andamento', false);
 }
 
 async function handlePagou(cliente, telefone, nome, nomeCompleto, idCliente) {
