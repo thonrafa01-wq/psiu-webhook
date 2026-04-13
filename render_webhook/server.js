@@ -909,6 +909,71 @@ async function handleClienteIdentificado(cliente, telefone, mensagem) {
     estado = 'identificado';
   }
 
+  // ── AGUARDANDO REINÍCIO: cliente pediu para reiniciar e está esperando resposta ──
+  if (estado === 'aguardando_reinicio') {
+    const msgNorm = mensagem.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const voltou  = msgNorm.match(/voltei|voltou|reiniciei|reinicializei|liguei|funcionou|ta funcionando|voltou a internet|voltou internet|sim|ok|pronto|feito|ja fiz|fiz isso/);
+    const naoVoltou = msgNorm.match(/nao voltou|nao funcionou|ainda nao|continua|mesmo problema|nao resolveu|nada|nao|n$/);
+
+    if (voltou) {
+      await enviarMensagem(telefone, `Perfeito, *${nome}*! Vou verificar novamente sua conexão... 🔄`);
+      const acesso2 = await verificarAcesso(idCliente, telefone);
+
+      if (acesso2?.status === 1) {
+        // ✅ Voltou! Fechar sem abrir chamado
+        await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'identificado' });
+        await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'resolvido', true);
+        await enviarMensagem(telefone, `Ótimo, *${nome}*! ✅ Sua conexão está *online* e normalizada!
+
+Se precisar de mais alguma coisa é só chamar 😊`);
+        console.log('[REINICIO] Resolvido sem chamado para', telefone);
+        return;
+      } else {
+        // ❌ Ainda offline → agora sim abre chamado
+        const descricaoOS = `Equipamento offline após reinicialização. Cliente confirmou reinício mas conexão não voltou.`;
+        const chamado2 = await abrirChamado(idCliente, telefone, descricaoOS);
+        const protocolo2 = chamado2.protocolo || chamado2.idSuporte || 'gerado';
+        await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'chamado_aberto' });
+        await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'chamado_aberto', false);
+        await enviarMensagem(telefone, `*${nome}*, ainda não normalizou 😕
+
+Abri um chamado técnico para nossa equipe verificar presencialmente.
+
+📋 *Protocolo: ${protocolo2}*
+
+Guarde esse número! Nossa equipe entrará em contato em breve.`);
+        await alertarRafa('🔴', 'NÃO VOLTOU APÓS REINÍCIO', nomeCompleto, telefone, `Reiniciou mas não voltou. Chamado aberto.
+📋 Protocolo: ${protocolo2}`);
+        return;
+      }
+    }
+
+    if (naoVoltou) {
+      // Não tentou reiniciar ou confirmou que não voltou → chamado imediato
+      const descricaoOS2 = `Equipamento offline. Cliente informou que não voltou após tentativa de reinicialização.`;
+      const chamado3 = await abrirChamado(idCliente, telefone, descricaoOS2);
+      const protocolo3 = chamado3.protocolo || chamado3.idSuporte || 'gerado';
+      await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'chamado_aberto' });
+      await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'chamado_aberto', false);
+      await enviarMensagem(telefone, `Entendido, *${nome}* 😕
+
+Abri um chamado técnico com prioridade para nossa equipe ir até você!
+
+📋 *Protocolo: ${protocolo3}*
+
+Guarde esse número. Nossa equipe entrará em contato em breve!`);
+      await alertarRafa('🔴', 'CHAMADO DE CAMPO', nomeCompleto, telefone, `Cliente confirmou que não voltou após reinício.
+📋 Protocolo: ${protocolo3}`);
+      return;
+    }
+
+    // Mensagem ambígua no estado aguardando_reinicio → lembrar de reiniciar
+    await enviarMensagem(telefone, `*${nome}*, conseguiu reiniciar o roteador? Basta desligar da tomada por 30 segundos e ligar de volta 🔌
+
+Me avisa quando fizer! 😊`);
+    return;
+  }
+
   // ── CONFIRMAR REINICIALIZAÇÃO: cliente voltou após chamado ─────────────────
   if (estado === 'chamado_aberto') {
     const msgNorm = mensagem.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -1275,26 +1340,47 @@ async function handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, id
   else if (equipOnline)  tipoProblema = 'Equipamento online mas cliente sem internet — instabilidade';
   const descricaoOS = `${tipoProblema}. Mensagem do cliente: "${mensagem.substring(0, 150)}"`;
 
-  const chamado   = await abrirChamado(idCliente, telefone, descricaoOS);
-  const protocolo = chamado.protocolo || chamado.idSuporte || 'gerado';
-
-  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'chamado_aberto' });
-  await registrarAtendimento(telefone, nomeCompleto, idCliente, luzVermelha ? 'suporte_campo' : 'suporte', mensagem, 'chamado_aberto', false);
-
+  // 🔴 Luz vermelha = fibra com problema = chamado direto, sem pedir reinício
   if (luzVermelha) {
-    await enviarMensagem(telefone, `*${nome}*, luz vermelha indica um problema na fibra que precisamos verificar presencialmente. 🔴\n\nJá abri um chamado técnico para visita! Nossa equipe entrará em contato em breve.\n\n📋 *Protocolo: ${protocolo}*\n\nGuarde esse número para acompanhar seu atendimento.`);
-    await alertarRafa('🔴', 'CHAMADO DE CAMPO', nomeCompleto, telefone, `⚠️ Luz vermelha — falha na fibra!\n📋 Protocolo: ${protocolo}`);
-  } else if (equipOnline) {
-    await enviarMensagem(telefone, `*${nome}*, seu equipamento aparece *online* no nosso sistema. Pode ser instabilidade momentânea. 🔄\n\nTenta reiniciar o roteador: *desliga da tomada por 30 segundos e liga novamente.*\n\nJá abri um chamado técnico! 🔧\n📋 *Protocolo: ${protocolo}*\n\nNossa equipe vai verificar remotamente. Guarde esse número!`);
-    await alertarRafa('🟡', 'CHAMADO TÉCNICO', nomeCompleto, telefone, `Equipamento *online* mas cliente sem internet.\n📋 Protocolo: ${protocolo}`);
-  } else if (equipOffline) {
-    await enviarMensagem(telefone, `*${nome}*, seu equipamento está *offline* no nosso sistema. 📡\n\nTenta reiniciar: *desliga o roteador da tomada por 30 segundos e liga novamente.*\n\nJá abri um chamado técnico! 🔧\n📋 *Protocolo: ${protocolo}*\n\nSe não resolver em 30 minutos, nossa equipe entra em contato. Guarde esse número!`);
-    await alertarRafa('🔴', 'CHAMADO DE CAMPO', nomeCompleto, telefone, `Equipamento *offline*.\n📋 Protocolo: ${protocolo}`);
-  } else {
-    // Não foi possível verificar status — mensagem neutra
-    await enviarMensagem(telefone, `*${nome}*, já abri um chamado técnico para nossa equipe verificar! 🔧\n\nEnquanto isso, tenta reiniciar o roteador: *desliga da tomada por 30 segundos e liga novamente.*\n\n📋 *Protocolo: ${protocolo}*\n\nGuarde esse número para acompanhar seu atendimento.`);
-    await alertarRafa('🟡', 'CHAMADO TÉCNICO', nomeCompleto, telefone, `Status do equipamento não disponível.\n📋 Protocolo: ${protocolo}`);
+    const chamadoLv = await abrirChamado(idCliente, telefone, descricaoOS);
+    const protocoloLv = chamadoLv.protocolo || chamadoLv.idSuporte || 'gerado';
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'chamado_aberto' });
+    await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte_campo', mensagem, 'chamado_aberto', false);
+    await enviarMensagem(telefone, `*${nome}*, luz vermelha indica um problema na fibra que precisamos verificar presencialmente. 🔴
+
+Já abri um chamado técnico para visita! Nossa equipe entrará em contato em breve.
+
+📋 *Protocolo: ${protocoloLv}*
+
+Guarde esse número para acompanhar seu atendimento.`);
+    await alertarRafa('🔴', 'CHAMADO DE CAMPO', nomeCompleto, telefone, `⚠️ Luz vermelha — falha na fibra!
+📋 Protocolo: ${protocoloLv}`);
+    return;
   }
+
+  // 🟡/🔴 Online ou offline sem luz vermelha → pede reinício ANTES de abrir chamado
+  if (equipOnline) {
+    await enviarMensagem(telefone, `*${nome}*, seu equipamento aparece *online* no nosso sistema, mas pode estar com instabilidade. 🔄
+
+Pode *desligar o roteador da tomada por 30 segundos* e ligar novamente? Me avisa quando fizer 😊`);
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_reinicio' });
+    await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'em_andamento', false);
+    return;
+  }
+
+  if (equipOffline) {
+    await enviarMensagem(telefone, `*${nome}*, seu equipamento está *offline* no nosso sistema. 📡
+
+Vamos tentar resolver rapidinho! Pode *desligar o roteador da tomada por 30 segundos* e ligar novamente? Me avisa quando fizer 😊`);
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_reinicio' });
+    await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'em_andamento', false);
+    return;
+  }
+
+  // Status desconhecido → pede reinício também (melhor tentar antes de abrir chamado)
+  await enviarMensagem(telefone, `*${nome}*, vamos tentar resolver isso! Pode *desligar o roteador da tomada por 30 segundos* e ligar novamente? Me avisa quando fizer 😊`);
+  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_reinicio' });
+  await registrarAtendimento(telefone, nomeCompleto, idCliente, 'suporte', mensagem, 'em_andamento', false);
 }
 
 async function handlePagou(cliente, telefone, nome, nomeCompleto, idCliente) {
