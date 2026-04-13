@@ -1143,10 +1143,12 @@ Nossa equipe já foi acionada e está trabalhando na resolução.
   if (intencao === 'verificar_conexao') {
     const acesso = await verificarAcesso(idCliente, telefone);
     if (acesso?.status === 1) {
+      await registrarAtendimento(telefone, nomeCompleto, idCliente, 'verificar_conexao', mensagemEfetiva, 'resolvido', true);
       await enviarMensagem(telefone, `*${nome}*, acabei de verificar: seu equipamento está *online* ✅\n\nSe ainda estiver com lentidão, tenta reiniciar o roteador: desliga da tomada por 30 segundos e liga de novo. Se persistir, abro um chamado! 🔧`);
     } else if (acesso?.status === 2) {
       return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
     } else {
+      await registrarAtendimento(telefone, nomeCompleto, idCliente, 'verificar_conexao', mensagemEfetiva, 'em_andamento', false);
       await enviarMensagem(telefone, `*${nome}*, não consegui verificar o status agora. Se estiver com problema de internet me diga que abro um chamado técnico! 🔧`);
     }
     return;
@@ -1166,6 +1168,9 @@ async function handleIAConversacional(cliente, telefone, mensagem, nome, nomeCom
   if (intencao === 'boleto') return handleBoleto(cliente, telefone, nome, nomeCompleto, idCliente);
   if (intencao === 'pagou')  return handlePagou(cliente, telefone, nome, nomeCompleto, idCliente);
   if (intencao === 'suporte') return handleSuporte(cliente, telefone, mensagem, nome, nomeCompleto, idCliente);
+
+  // Registrar atendimento para qualquer interação via IA conversacional
+  await registrarAtendimento(telefone, nomeCompleto, idCliente, intencao || 'duvida', mensagem, 'resolvido', true);
 
   // Contexto de conversa: usar última_mensagem para resolver "sim/não" ambíguos
   const ultimaMensagem = cliente?.ultima_mensagem || '';
