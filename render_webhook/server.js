@@ -708,10 +708,14 @@ Vou te colocar em *prioridade máxima* com um atendente agora para resolver isso
             ultimo_contato: new Date().toISOString(),
             estado_conversa: 'aguardando_cpf'
           });
+        } else {
+          // Garantir que o estado seja aguardando_cpf para o próximo ciclo cair aqui de novo
+          await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_cpf', ultimo_contato: new Date().toISOString() });
+          cliente = { ...cliente, estado_conversa: 'aguardando_cpf' };
         }
         await enviarMensagem(telefone, `Não encontrei cadastro com esse CPF/CNPJ. 😕
 
-Verifica se está correto e envia novamente, ou fale *atendente* para falar com nossa equipe!`);
+Verifica se o número está correto e tente novamente, ou fale *atendente* para falar com nossa equipe!`);
         return;
       }
     }
@@ -844,6 +848,23 @@ async function handleIdentificacaoPorCpf(cliente, telefone, mensagem) {
       cliente = { ...cliente, mensagem_original_pre_cpf: mensagem };
       console.log('[CPF] Mensagem original atualizada:', mensagem.substring(0, 60));
     }
+  }
+
+  // Se estado é aguardando_cpf e mensagem NÃO parece CPF → lembrar o cliente de enviar CPF
+  if (cliente.estado_conversa === 'aguardando_cpf' && cpf.length < 11) {
+    // Verificar se é pedido de atendente
+    if (/atendente|humano|pessoa|falar com/i.test(mensagem)) {
+      await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'atendente_novo_cliente' });
+      await enviarMensagem(telefone, `Tudo bem! 😊 Vou te passar para um atendente.
+
+Nosso horário é *seg-sex das 9h às 20h*. Em breve alguém te responde!`);
+      await registrarAtendimento(telefone, 'Cliente não identificado', null, 'novo_cliente', mensagem, 'encaminhado_atendente', false);
+      return;
+    }
+    await enviarMensagem(telefone, `Para te ajudar preciso te localizar no sistema 😊
+
+Pode me enviar seu *CPF ou CNPJ*? (somente números ou com pontos/traços)`);
+    return;
   }
 
   // Se veio um CPF/CNPJ válido — tentar identificar
