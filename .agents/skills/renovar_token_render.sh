@@ -6,9 +6,6 @@ source /app/.agents/.env
 
 echo "[TOKEN] Buscando token atual..."
 
-# O token é gerado dinamicamente pelo ambiente da Base44
-# Vamos pegar o token atual do ambiente e atualizar no Render
-
 TOKEN="$BASE44_SERVICE_TOKEN"
 
 if [ -z "$TOKEN" ]; then
@@ -33,26 +30,26 @@ DIFF=$((EXP - NOW))
 
 echo "[TOKEN] Expira em: ${DIFF}s ($(( DIFF / 60 )) minutos)"
 
-# Atualizar no Render
+# Atualizar no Render — incluir TODAS as envvars para não perder nenhuma
 RESULT=$(curl -s -X PUT "https://api.render.com/v1/services/srv-d7bgm3p17lss73aitb30/env-vars" \
   -H "Authorization: Bearer $RENDER_API_KEY" \
   -H "Content-Type: application/json" \
   -d "[
     {\"key\": \"BASE44_SERVICE_TOKEN\", \"value\": \"$TOKEN\"},
-    {\"key\": \"RECEITANET_CHATBOT_TOKEN\", \"value\": \"$RECEITANET_CHATBOT_TOKEN\"},
+    {\"key\": \"RECEITANET_CHATBOT_TOKEN\", \"value\": \"4761052b-1c8c-494a-a4a9-ae60b6b15b2d\"},
+    {\"key\": \"RECEITANET_TOKEN\", \"value\": \"4761052b-1c8c-494a-a4a9-ae60b6b15b2d\"},
     {\"key\": \"GROQ_API_KEY\", \"value\": \"$GROQ_API_KEY\"}
   ]")
 
 echo "[RENDER] Resposta: $(echo $RESULT | head -c 100)"
 
-# Forçar redeploy apenas se token estiver perto de expirar (menos de 3 horas)
-if [ "$DIFF" -lt 10800 ]; then
-  echo "[RENDER] Token expira em menos de 3h — forçando redeploy..."
-  DEPLOY=$(curl -s -X POST "https://api.render.com/v1/services/srv-d7bgm3p17lss73aitb30/deploys" \
-    -H "Authorization: Bearer $RENDER_API_KEY" \
-    -H "Content-Type: application/json" \
-    -d "{\"clearCache\": \"do_not_clear\"}")
-  echo "[RENDER] Deploy: $(echo $DEPLOY | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('deploy',{}).get('status','?'))" 2>/dev/null)"
-fi
+# Forçar redeploy sempre para garantir que o novo token está ativo no servidor
+echo "[RENDER] Forçando redeploy para atualizar token..."
+DEPLOY=$(curl -s -X POST "https://api.render.com/v1/services/srv-d7bgm3p17lss73aitb30/deploys" \
+  -H "Authorization: Bearer $RENDER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"clearCache\": \"do_not_clear\"}")
+DEPLOY_STATUS=$(echo $DEPLOY | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('deploy',{}).get('status','?'))" 2>/dev/null)
+echo "[RENDER] Deploy: $DEPLOY_STATUS"
 
 echo "[TOKEN] Concluído"
