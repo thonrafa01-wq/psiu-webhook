@@ -107,6 +107,11 @@ async function receitanetPost(endpoint, extraBody) {
   return safeJson(res);
 }
 
+function ehCpfOuCnpj(texto) {
+  const numeros = texto.replace(/\D/g, '');
+  return numeros.length === 11 || numeros.length === 14;
+}
+
 const buscarClientePorTelefone = (phone) => { const phoneSem55 = phone.startsWith('55') ? phone.slice(2) : phone; return receitanetPost('clientes', { phone: phoneSem55 }); };
 const buscarClientePorCpf      = (cpfcnpj)   => receitanetPost('clientes', { cpfcnpj: cpfcnpj.replace(/\D/g, '') });
 const buscarClientePorId       = (idCliente) => receitanetPost('clientes', { idCliente });
@@ -564,6 +569,49 @@ app.post('/webhook', async (req, res) => {
     }
 
     console.log('[SESSAO] cliente encontrado no banco:', cliente ? `id=${cliente.id} identificado=${cliente.identificado} id_receitanet=${cliente.id_cliente_receitanet} telefone_banco=${cliente.telefone}` : 'NÃO ENCONTRADO');
+
+    // ── INTERCEPTOR CPF: detectar CPF/CNPJ ANTES de qualquer rota ─────────────
+    // Se o cliente NÃO está identificado e enviou algo que parece CPF/CNPJ → buscar direto
+    if (!cliente?.id_cliente_receitanet && ehCpfOuCnpj(mensagemRecebida)) {
+      console.log('[CPF_INTERCEPT] Detectado CPF/CNPJ na entrada:', mensagemRecebida.replace(/\D/g,'').substring(0,14));
+      const resultadoCpf = await buscarClientePorCpf(mensagemRecebida);
+      if (resultadoCpf.success && resultadoCpf.contratos?.idCliente) {
+        const msgOriginal = cliente?.mensagem_original_pre_cpf || null;
+        const dados = {
+          telefone,
+          id_cliente_receitanet: String(resultadoCpf.contratos.idCliente),
+          nome: resultadoCpf.contratos.razaoSocial || '',
+          cpf_cnpj: mensagemRecebida.replace(/\D/g,''),
+          identificado: true,
+          ultimo_contato: new Date().toISOString(),
+          estado_conversa: 'identificado',
+          mensagem_original_pre_cpf: null
+        };
+        if (cliente) {
+          await dbUpdate('ClienteWhatsapp', cliente.id, dados);
+          cliente = { ...cliente, ...dados };
+        } else {
+          cliente = await dbCreate('ClienteWhatsapp', dados);
+        }
+        console.log('[CPF_INTERCEPT] Cliente identificado:', dados.nome, '| id:', dados.id_cliente_receitanet);
+        // Usar mensagem original (antes do CPF) para dar continuidade ao atendimento
+        await handleClienteIdentificado(cliente, telefone, msgOriginal || mensagemRecebida);
+        return;
+      } else {
+        // CPF não encontrado no Receitanet
+        if (!cliente) {
+          cliente = await dbCreate('ClienteWhatsapp', {
+            telefone, identificado: false,
+            ultimo_contato: new Date().toISOString(),
+            estado_conversa: 'aguardando_cpf'
+          });
+        }
+        await enviarMensagem(telefone, `Não encontrei cadastro com esse CPF/CNPJ. 😕
+
+Verifica se está correto e envia novamente, ou fale *atendente* para falar com nossa equipe!`);
+        return;
+      }
+    }
 
     // ── ROTA 1: cliente JÁ identificado no banco → atender direto ─────────────
     // Esta é a rota principal. Se temos id_cliente_receitanet, NUNCA pedimos CPF.
