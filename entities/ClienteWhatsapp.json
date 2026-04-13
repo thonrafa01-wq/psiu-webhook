@@ -24,6 +24,12 @@
     },
     "mensagem_original_pre_cpf": {
       "type": "string"
+    },
+    "ultima_mensagem": {
+      "type": "string"
+    },
+    "cpf_tentativas": {
+      "type": "number"
     }
   },
   "required": [],

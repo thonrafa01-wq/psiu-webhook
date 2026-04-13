@@ -701,21 +701,37 @@ Vou te colocar em *prioridade máxima* com um atendente agora para resolver isso
         await handleClienteIdentificado(cliente, telefone, msgOriginal || mensagemRecebida);
         return;
       } else {
-        // CPF não encontrado no Receitanet
+        // CPF não encontrado no Receitanet — contar tentativas
+        const tentativas = (cliente?.cpf_tentativas || 0) + 1;
         if (!cliente) {
           cliente = await dbCreate('ClienteWhatsapp', {
             telefone, identificado: false,
             ultimo_contato: new Date().toISOString(),
-            estado_conversa: 'aguardando_cpf'
+            estado_conversa: 'aguardando_cpf',
+            cpf_tentativas: 1
           });
         } else {
-          // Garantir que o estado seja aguardando_cpf para o próximo ciclo cair aqui de novo
-          await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_cpf', ultimo_contato: new Date().toISOString() });
-          cliente = { ...cliente, estado_conversa: 'aguardando_cpf' };
+          await dbUpdate('ClienteWhatsapp', cliente.id, {
+            estado_conversa: 'aguardando_cpf',
+            ultimo_contato: new Date().toISOString(),
+            cpf_tentativas: tentativas
+          });
+          cliente = { ...cliente, estado_conversa: 'aguardando_cpf', cpf_tentativas: tentativas };
         }
-        await enviarMensagem(telefone, `Não encontrei cadastro com esse CPF/CNPJ. 😕
-
-Verifica se o número está correto e tente novamente, ou fale *atendente* para falar com nossa equipe!`);
+        console.log('[CPF_INTERCEPTOR] CPF não encontrado | tentativa:', tentativas);
+        if (tentativas >= 2) {
+          // Após 2 tentativas falhas → encaminhar para atendente
+          await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_atendente', cpf_tentativas: 0 });
+          await enviarMensagem(telefone,
+            `Não consegui localizar esse CPF/CNPJ. 😕\n\n` +
+            `Não se preocupe! Vou chamar um atendente da nossa equipe para te ajudar. Aguarda um momento... 🙏`
+          );
+          await alertarRafa('⚠️', 'CPF NÃO LOCALIZADO', telefone, telefone,
+            `Cliente enviou CPF/CNPJ 2x mas não foi encontrado no Receitanet.\nNúmero tentado: ${mensagemRecebida.replace(/\D/g,'').substring(0,14)}\nAtender manualmente!`
+          );
+        } else {
+          await enviarMensagem(telefone, `Não encontrei cadastro com esse CPF/CNPJ. 😕\n\nVerifica se o número está correto e tente novamente, ou fale *atendente* para falar com nossa equipe!`);
+        }
         return;
       }
     }
@@ -852,11 +868,25 @@ async function handleIdentificacaoPorCpf(cliente, telefone, mensagem) {
       await handleClienteIdentificado(cliente, telefone, msgOriginal);
       return;
     } else {
-      // CPF não encontrado
-      await enviarMensagem(telefone,
-        `Não encontrei cadastro com esse CPF/CNPJ. 😕\n\n` +
-        `Verifica se está correto. Se preferir, nossa equipe pode te ajudar: basta digitar *atendente*!`
-      );
+      // CPF não encontrado — contar tentativas
+      const tentativas2 = (cliente?.cpf_tentativas || 0) + 1;
+      await dbUpdate('ClienteWhatsapp', cliente.id, { cpf_tentativas: tentativas2 });
+      console.log('[CPF_HANDLER] CPF não encontrado | tentativa:', tentativas2);
+      if (tentativas2 >= 2) {
+        await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_atendente', cpf_tentativas: 0 });
+        await enviarMensagem(telefone,
+          `Não consegui localizar esse CPF/CNPJ. 😕\n\n` +
+          `Não se preocupe! Vou chamar um atendente da nossa equipe para te ajudar. Aguarda um momento... 🙏`
+        );
+        await alertarRafa('⚠️', 'CPF NÃO LOCALIZADO', telefone, telefone,
+          `Cliente enviou CPF/CNPJ 2x mas não foi encontrado no Receitanet.\nNúmero tentado: ${mensagem.replace(/\D/g,'').substring(0,14)}\nAtender manualmente!`
+        );
+      } else {
+        await enviarMensagem(telefone,
+          `Não encontrei cadastro com esse CPF/CNPJ. 😕\n\n` +
+          `Verifica se está correto. Se preferir, nossa equipe pode te ajudar: basta digitar *atendente*!`
+        );
+      }
       return;
     }
   }
