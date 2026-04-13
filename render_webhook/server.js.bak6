@@ -825,50 +825,14 @@ Verifica se o número está correto e tente novamente, ou fale *atendente* para 
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// MÓDULO 8 — IDENTIFICAÇÃO POR CPF
+// MÓDULO 8 — IDENTIFICAÇÃO POR CPF (com contexto de intenção)
 // ═════════════════════════════════════════════════════════════════════════════
 async function handleIdentificacaoPorCpf(cliente, telefone, mensagem) {
-  const intencao = await classificarIntencao(mensagem);
   const cpf = mensagem.replace(/\D/g, '');
 
-  // Atualizar mensagem original se nova mensagem não for CPF (cliente ainda explorando)
-  const cpfCheck = mensagem.replace(/\D/g, '');
-
-  // Se a mensagem é SOMENTE números com 11+ dígitos, tratar como CPF/CNPJ direto
-  // (evita o bot perguntar "o que é isso?" quando cliente manda CPF sem formatação)
-  const soSoNumeros = /^\d[\d.\-\/\s]+$/.test(mensagem.trim());
-  if (soSoNumeros && cpfCheck.length >= 11 && cpfCheck.length <= 14) {
-    // Cai direto na busca por CPF abaixo — não vai para IA conversacional
-    console.log('[CPF] Detectado número puro como CPF/CNPJ:', cpfCheck.substring(0, 14));
-  } else if (cpfCheck.length < 11 && cliente.estado_conversa === 'aguardando_cpf') {
-    // Mensagem não parece CPF — atualizar mensagem original se fizer sentido
-    const naoEhCPF = mensagem.length > 5 && !/^\d/.test(mensagem.trim());
-    if (naoEhCPF && (!cliente.mensagem_original_pre_cpf || cliente.mensagem_original_pre_cpf.length < mensagem.length)) {
-      await dbUpdate('ClienteWhatsapp', cliente.id, { mensagem_original_pre_cpf: mensagem });
-      cliente = { ...cliente, mensagem_original_pre_cpf: mensagem };
-      console.log('[CPF] Mensagem original atualizada:', mensagem.substring(0, 60));
-    }
-  }
-
-  // Se estado é aguardando_cpf e mensagem NÃO parece CPF → lembrar o cliente de enviar CPF
-  if (cliente.estado_conversa === 'aguardando_cpf' && cpf.length < 11) {
-    // Verificar se é pedido de atendente
-    if (/atendente|humano|pessoa|falar com/i.test(mensagem)) {
-      await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'atendente_novo_cliente' });
-      await enviarMensagem(telefone, `Tudo bem! 😊 Vou te passar para um atendente.
-
-Nosso horário é *seg-sex das 9h às 20h*. Em breve alguém te responde!`);
-      await registrarAtendimento(telefone, 'Cliente não identificado', null, 'novo_cliente', mensagem, 'encaminhado_atendente', false);
-      return;
-    }
-    await enviarMensagem(telefone, `Para te ajudar preciso te localizar no sistema 😊
-
-Pode me enviar seu *CPF ou CNPJ*? (somente números ou com pontos/traços)`);
-    return;
-  }
-
-  // Se veio um CPF/CNPJ válido — tentar identificar
+  // ── 1. Detectar se a mensagem É um CPF/CNPJ ───────────────────────────────
   if (cpf.length >= 11 && cpf.length <= 14) {
+    console.log('[CPF] Recebido CPF/CNPJ:', cpf.substring(0, 14));
     const resultado = await buscarClientePorCpf(cpf);
     if (resultado.success && resultado.contratos?.idCliente) {
       const dados = {
@@ -879,54 +843,108 @@ Pode me enviar seu *CPF ou CNPJ*? (somente números ou com pontos/traços)`);
         identificado: true,
         ultimo_contato: new Date().toISOString(),
         estado_conversa: 'identificado',
-        mensagem_original_pre_cpf: null  // limpar contexto de identificação
+        mensagem_original_pre_cpf: null
       };
       const msgOriginal = cliente.mensagem_original_pre_cpf || mensagem;
       await dbUpdate('ClienteWhatsapp', cliente.id, dados);
       cliente = { ...cliente, ...dados };
-      console.log('[CPF] mensagem original para orquestrador:', msgOriginal.substring(0, 80));
+      console.log('[CPF] Identificado! Redirecionando para intenção original:', msgOriginal.substring(0, 80));
       await handleClienteIdentificado(cliente, telefone, msgOriginal);
       return;
     } else {
-      await enviarMensagem(telefone, `Não encontrei cadastro com esse CPF/CNPJ. 😕\n\nVerifica se está correto. Se preferir, nossa equipe pode te ajudar por aqui mesmo!`);
+      // CPF não encontrado
+      await enviarMensagem(telefone,
+        `Não encontrei cadastro com esse CPF/CNPJ. 😕\n\n` +
+        `Verifica se está correto. Se preferir, nossa equipe pode te ajudar: basta digitar *atendente*!`
+      );
       return;
     }
   }
 
-  // Dúvida geral — responder sem pedir CPF
+  // ── 2. Mensagem NÃO é CPF → classificar intenção primeiro ─────────────────
+  const intencao = await classificarIntencao(mensagem);
+  console.log('[CPF_INTENT]', intencao, '| estado:', cliente.estado_conversa, '| msg:', mensagem.substring(0, 50));
+
+  // Salvar mensagem original para usar depois que identificar
+  const jaTemMsgOriginal = !!cliente.mensagem_original_pre_cpf;
+  if (!jaTemMsgOriginal) {
+    await dbUpdate('ClienteWhatsapp', cliente.id, { mensagem_original_pre_cpf: mensagem });
+    cliente = { ...cliente, mensagem_original_pre_cpf: mensagem };
+  }
+
+  // ── Quer falar com atendente ───────────────────────────────────────────────
+  if (intencao === 'atendente' || /atendente|humano|pessoa real|falar com/i.test(mensagem)) {
+    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'atendente_novo_cliente' });
+    await enviarMensagem(telefone,
+      `Tudo bem! 😊 Vou te passar para um atendente.\n\n` +
+      `Nosso horário é *seg-sex das 9h às 20h*. Em breve alguém te responde!`
+    );
+    await registrarAtendimento(telefone, 'Cliente não identificado', null, 'novo_cliente', mensagem, 'encaminhado_atendente', false);
+    return;
+  }
+
+  // ── Dúvida geral (sem precisar de cadastro) ───────────────────────────────
   if (intencao === 'duvida') {
     return handleDuvida(cliente, telefone, mensagem, null);
   }
 
-  // Interesse comercial — encaminhar para equipe sem pedir CPF
+  // ── Interesse comercial (quer contratar) ──────────────────────────────────
   if (intencao === 'comercial') {
     return handleComercial(cliente, telefone, mensagem, null);
   }
 
-  // Quer contratar — encaminhar direto para atendente
-  if (intencao === 'atendente') {
-    await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'atendente_novo_cliente' });
-    await registrarAtendimento(telefone, 'Novo Cliente', null, 'novo_cliente', mensagem, 'encaminhado_atendente', false);
-    const msg = atendenteDisponivel()
-      ? `Olá! 👋 Que ótimo que você quer conhecer a PSIU!\n\nVou te conectar com nosso time agora. Um atendente entrará em contato em breve! 😊`
-      : `Olá! 👋 Que ótimo que você quer conhecer a PSIU!\n\nNosso horário de atendimento é *seg-sex das 9h às 20h*. Assim que nossa equipe chegar, entraremos em contato! 😊`;
-    await enviarMensagem(telefone, msg);
-    await alertarRafa('🆕', 'NOVO CLIENTE INTERESSADO', 'Novo Cliente', telefone, `📲 Quer contratar a PSIU! Entre em contato.`);
+  // ── INTENÇÃO ESPECÍFICA → pedir CPF de forma CONTEXTUAL (não genérica) ────
+  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_cpf', ultimo_contato: new Date().toISOString() });
+
+  // Mensagem personalizada por intenção — humanizada e direta
+  if (intencao === 'pagou') {
+    await enviarMensagem(telefone,
+      `Entendi! 👍 Se você já realizou o pagamento, pode ser que ainda esteja em processamento.\n\n` +
+      `Para eu verificar certinho pra você, pode me informar seu *CPF ou CNPJ*? 😊`
+    );
     return;
   }
 
-  // Qualquer outra mensagem (inclusive "já sou cliente", "boleto", "suporte")
-  // → pedir CPF para identificar (sem reiniciar com boas-vindas se já está esperando CPF)
-  await dbUpdate('ClienteWhatsapp', cliente.id, { estado_conversa: 'aguardando_cpf', ultimo_contato: new Date().toISOString() });
-  if (cliente.estado_conversa === 'aguardando_cpf') {
-    // Já pediu antes — mensagem mais direta
-    await enviarMensagem(telefone, `Pode me enviar seu *CPF ou CNPJ* (só os números) para eu te localizar no sistema 😊`);
-  } else {
-    await enviarMensagem(telefone, `Olá! 👋 Bem-vindo(a) à *PSIU TELECOM*!\n\nNão encontrei seu número no cadastro. Me passa seu *CPF ou CNPJ* para eu te localizar 😊\n\nSe quiser contratar nossos serviços, é só dizer!`);
+  if (intencao === 'boleto') {
+    await enviarMensagem(telefone,
+      `Claro, vou te ajudar com isso! 💰\n\n` +
+      `Para localizar sua fatura, preciso do seu *CPF ou CNPJ* (só os números). Pode mandar? 😊`
+    );
+    return;
   }
+
+  if (intencao === 'suporte') {
+    await enviarMensagem(telefone,
+      `Que chato, vou te ajudar agora! 🔧\n\n` +
+      `Só preciso te localizar no sistema primeiro. Me passa seu *CPF ou CNPJ*? (pode ser só os números)`
+    );
+    return;
+  }
+
+  if (intencao === 'cancelamento') {
+    await enviarMensagem(telefone,
+      `Entendido. 😔 Para eu verificar seu cadastro e te ajudar com isso, preciso do seu *CPF ou CNPJ*.\n\n` +
+      `Pode me passar?`
+    );
+    return;
+  }
+
+  // Já está esperando CPF (segunda mensagem sem CPF) → mensagem mais direta
+  if (cliente.estado_conversa === 'aguardando_cpf') {
+    await enviarMensagem(telefone,
+      `Pode me enviar seu *CPF ou CNPJ* (só os números) para eu te localizar no sistema? 😊`
+    );
+    return;
+  }
+
+  // Primeiro contato genérico
+  await enviarMensagem(telefone,
+    `Olá! 👋 Aqui é a *PSIU TELECOM*.\n\n` +
+    `Para te ajudar, preciso localizar seu cadastro. Pode me passar seu *CPF ou CNPJ*? 😊\n\n` +
+    `Se quiser falar com um atendente, é só digitar *atendente*!`
+  );
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
 // MÓDULO 9 — ORQUESTRADOR IA CONVERSACIONAL (cliente identificado)
 // ═════════════════════════════════════════════════════════════════════════════
 async function handleClienteIdentificado(cliente, telefone, mensagem) {

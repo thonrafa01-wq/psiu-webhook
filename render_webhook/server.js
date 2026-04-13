@@ -1225,18 +1225,19 @@ PERSONALIDADE: Educado, natural, humano — como um atendente real no WhatsApp. 
 
 CONTEXTO DO CLIENTE:
 - Nome: ${nomeCompleto}
-- É cliente cadastrado: sim
-- ID interno: ${idCliente || 'não localizado'}${contextoConv}
+- É cliente cadastrado: sim${contextoConv}
 
-REGRAS (NUNCA QUEBRE):
-1. Se for saudação (oi, olá, bom dia, boa tarde): responda com calor e pergunte como pode ajudar de forma NATURAL. Jamais liste menus ou opções numeradas.
-2. Se for dúvida técnica (fibra, modem, velocidade, etc.): explique de forma simples e didática.
-3. Se for pergunta sobre planos ou preços: diga que temos planos de fibra óptica e que um atendente pode passar os valores atualizados.
-4. Seja SEMPRE conciso: máximo 3-4 linhas por resposta.
-5. Se o cliente perguntar sobre conta, fatura ou pagamento, diga que vai verificar agora mesmo.
-6. Jamais use listas numeradas ou bullet points — pareça humano de verdade.
-7. Se a mensagem atual for "sim" ou "ok" e houver contexto da última mensagem, responda de acordo com esse contexto — não pergunte de novo.
-8. Nunca repita o que você acabou de dizer ou pergunte a mesma coisa duas vezes.
+REGRAS ABSOLUTAS (NUNCA QUEBRE):
+1. NUNCA mencione IDs, números internos, sistemas, banco de dados, código ou processos técnicos internos.
+2. NUNCA diga "vou verificar seu ID", "buscando no sistema", "localizando cadastro" — você é um atendente humano.
+3. Se for saudação (oi, olá, bom dia, boa tarde): responda com calor e pergunte como pode ajudar de forma NATURAL. Jamais liste menus ou opções numeradas.
+4. Se for dúvida técnica (fibra, modem, velocidade, etc.): explique de forma simples e didática.
+5. Se for pergunta sobre planos ou preços: diga que temos planos de fibra óptica e que um atendente pode passar os valores atualizados.
+6. Seja SEMPRE conciso: máximo 3 linhas por resposta.
+7. Se o cliente mencionar pagamento ou fatura, responda de forma humana e empática — NÃO diga que vai verificar no sistema.
+8. Jamais use listas numeradas ou bullet points — pareça humano de verdade.
+9. Se a mensagem atual for "sim" ou "ok" e houver contexto da última mensagem, responda de acordo com esse contexto — não pergunte de novo.
+10. Nunca repita o que você acabou de dizer ou pergunte a mesma coisa duas vezes.
 
 Mensagem atual do cliente: "${mensagem}"`;
 
@@ -1441,10 +1442,27 @@ Vamos tentar resolver rapidinho! Pode *desligar o roteador da tomada por 30 segu
 
 async function handlePagou(cliente, telefone, nome, nomeCompleto, idCliente) {
   const cpf = cliente.cpf_cnpj ? cliente.cpf_cnpj.replace(/\D/g, '') : null;
+  console.log('[PAGOU] Iniciando | nome:', nomeCompleto, '| cpf:', cpf?.substring(0,6), '| idCliente:', idCliente);
   const dados = cpf ? await buscarClientePorCpf(cpf) : await buscarClientePorId(idCliente);
+  console.log('[PAGOU] Resposta API | success:', dados?.success, '| _error:', dados?._error, '| status:', dados?._status);
   const contrato = dados.success
     ? (Array.isArray(dados.contratos) ? dados.contratos[0] : dados.contratos)
     : null;
+  
+  // Se a API falhou (erro de conexão, timeout) — resposta humana sem expor o problema
+  if (dados._error || (!dados.success && !contrato)) {
+    console.log('[PAGOU] API indisponível ou CPF não encontrado — alertando Rafa');
+    await enviarMensagem(telefone,
+      `*${nome}*, recebi sua informação sobre o pagamento! 👍\n\n` +
+      `Nossa equipe vai conferir e, caso ainda não tenha compensado, libera sua conexão manualmente. ⏳\n\n` +
+      `Se tiver o comprovante, pode enviar aqui pra agilizar! 😊`
+    );
+    await alertarRafa('💰', 'CLIENTE DISSE QUE PAGOU', nomeCompleto, telefone,
+      `Cliente diz que pagou mas não foi possível verificar automaticamente.\nVerifique manualmente no Receitanet!`
+    );
+    await registrarAtendimento(telefone, nomeCompleto, idCliente, 'pagamento', 'Cliente disse que pagou', 'encaminhado_atendente', false);
+    return;
+  }
 
   // Verificar se o cliente usa liberação em confiança e se ainda pode usar
   const podeLiberar = contrato?.clienteLiberadoConfianca === 0 && contrato?.usouLiberacaoConfianca === 0;
