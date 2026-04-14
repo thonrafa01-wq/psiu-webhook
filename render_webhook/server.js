@@ -62,7 +62,37 @@ const ZAPI_BASE         = `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token
 const RAFA_PHONE        = '5519999619605';
 const GROQ_API_KEY      = process.env.GROQ_API_KEY || '';
 
-const getServiceToken = () => process.env.BASE44_SERVICE_TOKEN || '';
+// ── Auto-renovação de token Base44 ──────────────────────────────────────────
+let _cachedToken = process.env.BASE44_SERVICE_TOKEN || '';
+let _tokenExpAt  = 0;  // timestamp Unix de expiração
+
+function _parseTokenExp(token) {
+  try {
+    const payload = token.split('.')[1];
+    const decoded = JSON.parse(Buffer.from(payload, 'base64').toString('utf8'));
+    return decoded.exp || 0;
+  } catch { return 0; }
+}
+
+// Inicializar com token do boot
+if (_cachedToken) _tokenExpAt = _parseTokenExp(_cachedToken);
+
+async function _renovarToken() {
+  // Token é renovado via automação externa (Base44 agent) que chama POST /update-token
+  // Esta função é placeholder — a renovação real vem de fora
+  console.warn('[TOKEN] Token expirado — aguardando renovação via automação externa...');
+  return false;
+}
+
+async function getServiceToken() {
+  const agora = Date.now() / 1000;
+  // Renovar se faltar menos de 10 minutos ou já expirou
+  if (_tokenExpAt && (_tokenExpAt - agora) < 600) {
+    console.log('[TOKEN] Expira em breve, renovando...');
+    await _renovarToken();
+  }
+  return _cachedToken || process.env.BASE44_SERVICE_TOKEN || '';
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 // MÓDULO 1 — DB (Base44)
@@ -72,7 +102,7 @@ async function dbFilter(entity, query) {
   const url = `${BASE44_API}/${entity}?${params}`;
   console.log('[DB] GET', url.substring(0, 120));
   const res = await fetchWithTimeout(url, {
-    headers: { 'Authorization': `Bearer ${getServiceToken()}`, 'Content-Type': 'application/json' }
+    headers: { 'Authorization': `Bearer ${await getServiceToken()}`, 'Content-Type': 'application/json' }
   }, 8000);
   return safeJson(res);
 }
@@ -80,7 +110,7 @@ async function dbFilter(entity, query) {
 async function dbCreate(entity, data) {
   const res = await fetchWithTimeout(`${BASE44_API}/${entity}`, {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${getServiceToken()}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${await getServiceToken()}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   }, 8000);
   return safeJson(res);
@@ -89,7 +119,7 @@ async function dbCreate(entity, data) {
 async function dbUpdate(entity, id, data) {
   const res = await fetchWithTimeout(`${BASE44_API}/${entity}/${id}`, {
     method: 'PUT',
-    headers: { 'Authorization': `Bearer ${getServiceToken()}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${await getServiceToken()}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   }, 8000);
   return safeJson(res);
@@ -1598,6 +1628,19 @@ async function handleAtendente(cliente, telefone, mensagem, nome, nomeCompleto, 
 // ═════════════════════════════════════════════════════════════════════════════
 // ─── Endpoint: health/ping ─────────────────────────────────────────────────
 app.get('/ping', (req, res) => res.json({ ok: true, ts: Date.now() }));
+
+// Endpoint para receber novo token da automação Base44
+app.post('/update-token', (req, res) => {
+  const { token, secret } = req.body || {};
+  if (secret !== (process.env.UPDATE_TOKEN_SECRET || 'psiu2024')) {
+    return res.status(403).json({ error: 'unauthorized' });
+  }
+  if (!token) return res.status(400).json({ error: 'token required' });
+  _cachedToken = token;
+  _tokenExpAt  = _parseTokenExp(token);
+  console.log('[TOKEN] Atualizado via /update-token! Expira em:', Math.round((_tokenExpAt - Date.now()/1000)/60), 'min');
+  res.json({ ok: true, exp: _tokenExpAt });
+});
 app.get('/health', (req, res) => res.json({ status: 'ok', ts: Date.now() }));
 
 // ─── Endpoint: dados do dashboard (acesso service role) ────────────────────
