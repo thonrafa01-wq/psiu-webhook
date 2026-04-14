@@ -78,32 +78,10 @@ function _parseTokenExp(token) {
 if (_cachedToken) _tokenExpAt = _parseTokenExp(_cachedToken);
 
 async function _renovarToken() {
-  // Auto-renovação: chama a function Base44 que emite token fresco e faz POST /update-token
-  try {
-    console.log('[TOKEN] Auto-renovando via Base44 function...');
-    const res = await fetch(
-      'https://untitled-app-f813ec8a.base44.app/api/apps/69d55fd1a341508858f11d46/functions/renovarTokenGroq',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${_cachedToken || process.env.BASE44_SERVICE_TOKEN || ''}`
-        },
-        body: JSON.stringify({})
-      }
-    );
-    const data = await res.json().catch(() => ({}));
-    if (data.ok) {
-      console.log('[TOKEN] ✅ Auto-renovação bem-sucedida');
-      return true;
-    } else {
-      console.warn('[TOKEN] ⚠️ Resposta inesperada:', JSON.stringify(data));
-      return false;
-    }
-  } catch (err) {
-    console.error('[TOKEN] ❌ Falha na auto-renovação:', err.message);
-    return false;
-  }
+  // Token é renovado via automação externa (Base44 agent) que chama POST /update-token
+  // Esta função é placeholder — a renovação real vem de fora
+  console.warn('[TOKEN] Token expirado — aguardando renovação via automação externa...');
+  return false;
 }
 
 async function getServiceToken() {
@@ -151,12 +129,25 @@ async function dbUpdate(entity, id, data) {
 // MÓDULO 2 — RECEITANET
 // ═════════════════════════════════════════════════════════════════════════════
 async function receitanetPost(endpoint, extraBody) {
-  const res = await fetchWithTimeout(`${RECEITANET_BASE}/${endpoint}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: RECEITANET_TOKEN, app: 'chatbot', ...extraBody })
-  }, 10000);
-  return safeJson(res);
+  try {
+    const res = await fetchWithTimeout(`${RECEITANET_BASE}/${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: RECEITANET_TOKEN, app: 'chatbot', ...extraBody })
+    }, 10000);
+    const data = await safeJson(res);
+    // Se API retornou HTML (erro 502/503/504) ou erro interno — marcar como falha de API
+    if (data._error || res.status >= 500) {
+      console.warn('[RECEITANET] Erro HTTP', res.status, 'no endpoint:', endpoint);
+      return { success: false, error: true, status: res.status, _raw: data._raw };
+    }
+    return data;
+  } catch (err) {
+    // Timeout ou falha de rede
+    const isTimeout = err.name === 'AbortError';
+    console.warn('[RECEITANET] ' + (isTimeout ? 'Timeout' : 'Erro de rede') + ' no endpoint:', endpoint, err.message);
+    return { success: false, error: true, timeout: isTimeout, status: 0 };
+  }
 }
 
 function ehCpfOuCnpj(texto) {
@@ -730,6 +721,22 @@ Vou te colocar em *prioridade máxima* com um atendente agora para resolver isso
     if (!cliente?.id_cliente_receitanet && ehCpfOuCnpj(mensagemRecebida)) {
       console.log('[CPF_INTERCEPT] Detectado CPF/CNPJ na entrada:', mensagemRecebida.replace(/\D/g,'').substring(0,14));
       const resultadoCpf = await buscarClientePorCpf(mensagemRecebida);
+      console.log('[CPF_INTERCEPT] Resultado Receitanet:', JSON.stringify(resultadoCpf).substring(0, 200));
+      
+      // Se a API falhou (sem resposta / erro de rede), NÃO contar como tentativa errada
+      const apiIndisponivel = !resultadoCpf.success && !resultadoCpf.contratos && (resultadoCpf.error || resultadoCpf.status >= 500 || resultadoCpf.status === 0 || resultadoCpf.timeout);
+      if (apiIndisponivel) {
+        console.warn('[CPF_INTERCEPT] API Receitanet indisponível — aguardando e pedindo para tentar novamente');
+        // Salvar CPF para tentar novamente, mas não contar como erro do cliente
+        if (cliente) {
+          await dbUpdate('ClienteWhatsapp', cliente.id, { ultima_mensagem: mensagemRecebida.substring(0,200), ultimo_contato: new Date().toISOString() });
+        }
+        await enviarMensagem(telefone, `Estamos com uma instabilidade temporária no sistema de verificação. 😕
+
+Pode tentar novamente em instantes? Se o problema persistir, é só digitar *atendente* que nossa equipe te ajuda! 🙏`);
+        return;
+      }
+      
       if (resultadoCpf.success && resultadoCpf.contratos?.idCliente) {
         const msgOriginal = cliente?.mensagem_original_pre_cpf || null;
         const dados = {
@@ -1015,10 +1022,12 @@ async function handleIdentificacaoPorCpf(cliente, telefone, mensagem) {
     return;
   }
 
-  // Já está esperando CPF (segunda mensagem sem CPF) → mensagem mais direta
+  // Já está esperando CPF (segunda mensagem sem CPF) → atualizar contexto e pedir de forma direta
   if (cliente.estado_conversa === 'aguardando_cpf') {
+    // Atualizar mensagem original para a mais recente (contexto do problema atual)
+    await dbUpdate('ClienteWhatsapp', cliente.id, { mensagem_original_pre_cpf: mensagem, ultimo_contato: new Date().toISOString() });
     await enviarMensagem(telefone,
-      `Pode me enviar seu *CPF ou CNPJ* (só os números) para eu te localizar no sistema? 😊`
+      `Entendido! 😊 Para te ajudar, preciso te localizar no sistema.\n\nPode me passar seu *CPF ou CNPJ* (só os números)?`
     );
     return;
   }
