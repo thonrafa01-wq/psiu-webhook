@@ -730,7 +730,11 @@ Vou te colocar em *prioridade máxima* com um atendente agora para resolver isso
             `Cliente enviou CPF/CNPJ 2x mas não foi encontrado no Receitanet.\nNúmero tentado: ${mensagemRecebida.replace(/\D/g,'').substring(0,14)}\nAtender manualmente!`
           );
         } else {
-          await enviarMensagem(telefone, `Não encontrei cadastro com esse CPF/CNPJ. 😕\n\nVerifica se o número está correto e tente novamente, ou fale *atendente* para falar com nossa equipe!`);
+          await enviarMensagem(telefone, `Não encontrei nenhum cadastro com esse CPF/CNPJ. 😕
+
+Pode ter acontecido um errinho de digitação — tenta mandar só os números novamente.
+
+Ou se preferir, é só digitar *atendente* que a nossa equipe te ajuda na hora! 👋`);
         }
         return;
       }
