@@ -78,10 +78,32 @@ function _parseTokenExp(token) {
 if (_cachedToken) _tokenExpAt = _parseTokenExp(_cachedToken);
 
 async function _renovarToken() {
-  // Token é renovado via automação externa (Base44 agent) que chama POST /update-token
-  // Esta função é placeholder — a renovação real vem de fora
-  console.warn('[TOKEN] Token expirado — aguardando renovação via automação externa...');
-  return false;
+  // Auto-renovação: chama a function Base44 que emite token fresco e faz POST /update-token
+  try {
+    console.log('[TOKEN] Auto-renovando via Base44 function...');
+    const res = await fetch(
+      'https://untitled-app-f813ec8a.base44.app/api/apps/69d55fd1a341508858f11d46/functions/renovarTokenGroq',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${_cachedToken || process.env.BASE44_SERVICE_TOKEN || ''}`
+        },
+        body: JSON.stringify({})
+      }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (data.ok) {
+      console.log('[TOKEN] ✅ Auto-renovação bem-sucedida');
+      return true;
+    } else {
+      console.warn('[TOKEN] ⚠️ Resposta inesperada:', JSON.stringify(data));
+      return false;
+    }
+  } catch (err) {
+    console.error('[TOKEN] ❌ Falha na auto-renovação:', err.message);
+    return false;
+  }
 }
 
 async function getServiceToken() {
