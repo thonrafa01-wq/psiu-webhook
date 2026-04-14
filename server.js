@@ -538,3 +538,47 @@ app.listen(PORT, () => {
   console.log(`[SERVER] Token Base44: ${getBase44Token() ? 'ok' : 'FALTANDO!'}`);
   console.log(`[SERVER] Token Receitanet: ${getReceitanetToken() ? 'ok' : 'FALTANDO!'}`);
 });
+
+// ── DIAGNÓSTICO (temporário) ─────────────────────────────────────
+app.get('/diagnostico', async (req, res) => {
+  const results = {};
+  
+  // Teste Base44
+  try {
+    const r = await fetchTimeout('https://app.base44.com/api/apps/69d55fd1a341508858f11d46/entities/ClienteWhatsapp?limit=1', {
+      headers: { 'Authorization': `Bearer ${getBase44Token()}` }
+    }, 8000);
+    results.base44 = { status: r.status, ok: r.ok };
+    if (r.ok) {
+      const d = await r.json();
+      results.base44.registros = Array.isArray(d) ? d.length : 'ok';
+    }
+  } catch(e) { results.base44 = { erro: e.message }; }
+
+  // Teste Receitanet DNS
+  try {
+    const r = await fetchTimeout('https://api.receitanet.com.br', {}, 8000);
+    results.receitanet_dns = { status: r.status, ok: r.ok };
+  } catch(e) { results.receitanet_dns = { erro: e.message }; }
+
+  // Teste Receitanet busca
+  try {
+    const r = await fetchTimeout('https://api.receitanet.com.br/api/v1/clientes/buscar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: getReceitanetToken(), cpfCnpj: '39897075828' })
+    }, 10000);
+    const txt = await r.text();
+    results.receitanet_busca = { status: r.status, resposta: txt.substring(0, 200) };
+  } catch(e) { results.receitanet_busca = { erro: e.message }; }
+
+  // Variáveis presentes
+  results.vars = {
+    base44_token: getBase44Token() ? 'ok' : 'FALTANDO',
+    receitanet_token: getReceitanetToken() ? 'ok' : 'FALTANDO',
+    zapi_instance: process.env.ZAPI_INSTANCE_ID ? 'ok' : 'FALTANDO',
+    zapi_token: process.env.ZAPI_TOKEN ? 'ok' : 'FALTANDO'
+  };
+
+  res.json(results);
+});
